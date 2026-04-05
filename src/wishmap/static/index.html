@@ -482,12 +482,13 @@
     pinLayer = L.geoJSON(allPins, {
       filter: (feature) => matchesFilter(feature.properties),
       pointToLayer: (feature, latlng) => {
-        const status = feature.properties.status;
+        const p = feature.properties;
+        const isRouteStart = p.kind === 'route_start';
         return L.circleMarker(latlng, {
-          radius: 7,
-          fillColor: STATUS_COLORS[status] || '#8a7f72',
-          color: '#faf9f7',
-          weight: 2,
+          radius: isRouteStart ? 5 : 7,
+          fillColor: isRouteStart ? (p.color || STATUS_COLORS[p.status] || '#8a7f72') : (STATUS_COLORS[p.status] || '#8a7f72'),
+          color: isRouteStart ? '#302c27' : '#faf9f7',
+          weight: isRouteStart ? 1.5 : 2,
           fillOpacity: 0.9,
         });
       },

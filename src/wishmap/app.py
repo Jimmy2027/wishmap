@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 
 from wishmap.config import load_config, resolve_config_path
-from wishmap.geojson import pins_to_geojson, routes_to_geojson
+from wishmap.geojson import pins_to_geojson, route_start_pins_to_geojson, routes_to_geojson
 from wishmap.models import WishmapConfig
 
 _config: WishmapConfig
@@ -25,6 +25,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     _config = load_config(config_path)
     base_path = config_path.parent
     _pins_geojson = pins_to_geojson(_config.pins)
+    _pins_geojson["features"].extend(route_start_pins_to_geojson(_config.routes, base_path))
     _routes_geojson = routes_to_geojson(_config.routes, base_path)
     yield
 

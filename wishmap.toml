@@ -10,15 +10,6 @@ status = "idea"
 tags = ["hut", "viewpoint"]
 notes = "Could be a good overnight stop"
 
-[[pins]]
-id = "pin-2"
-name = "Gravel cafe"
-lat = 46.95
-lon = 9.60
-sport = "biking"
-status = "planned"
-tags = ["cafe", "rest"]
-notes = "Coffee stop on the gravel loop"
 
 [[routes]]
 id = "route-1"

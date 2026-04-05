@@ -54,3 +54,31 @@ def routes_to_geojson(
             },
         })
     return {"type": "FeatureCollection", "features": features}
+
+
+def route_start_pins_to_geojson(
+    routes: list[RouteConfig], base_path: Path
+) -> list[dict[str, Any]]:
+    """Generate a Point feature for the start of each route's GPX."""
+    features: list[dict[str, Any]] = []
+    for route in routes:
+        gpx_path = base_path / route.gpx
+        coords = parse_gpx(gpx_path)
+        features.append({
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": coords[0],
+            },
+            "properties": {
+                "id": f"{route.id}-start",
+                "name": route.name,
+                "kind": "route_start",
+                "sport": route.sport,
+                "status": route.status.value,
+                "tags": route.tags,
+                "notes": route.notes,
+                "color": route.color,
+            },
+        })
+    return features
