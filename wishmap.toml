@@ -1,0 +1,41 @@
+title = "wishmap"
+
+[[pins]]
+id = "pin-1"
+name = "Nice hut"
+lat = 46.835
+lon = 9.825
+sport = ["hiking", "ski_touring"]
+status = "idea"
+tags = ["hut", "viewpoint"]
+notes = "Could be a good overnight stop"
+
+[[pins]]
+id = "pin-2"
+name = "Gravel cafe"
+lat = 46.95
+lon = 9.60
+sport = "biking"
+status = "planned"
+tags = ["cafe", "rest"]
+notes = "Coffee stop on the gravel loop"
+
+[[routes]]
+id = "route-1"
+name = "Weekend gravel loop"
+sport = "biking"
+status = "planned"
+tags = ["gravel", "loop"]
+notes = "Try in late spring"
+color = "#2E86DE"
+gpx = "data/routes/weekend-gravel-loop.gpx"
+
+[[routes]]
+id = "route-2"
+name = "Ski tour example"
+sport = "ski_touring"
+status = "done"
+tags = ["winter"]
+notes = "Great descent"
+color = "#E74C3C"
+gpx = "data/routes/ski-tour-example.gpx"

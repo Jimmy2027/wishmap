@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>wishmap</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=Playfair+Display:wght@500;700&display=swap');
+
+  :root {
+    --stone-50: #faf9f7;
+    --stone-100: #f0ede8;
+    --stone-200: #e2ddd5;
+    --stone-300: #c9c1b6;
+    --stone-500: #8a7f72;
+    --stone-700: #5c544a;
+    --stone-900: #302c27;
+
+    --trail-green: #4a7c59;
+    --trail-green-light: #6b9e7a;
+    --trail-orange: #c77b3f;
+    --trail-orange-light: #e8a96a;
+    --trail-red: #b5493a;
+    --trail-blue: #3f7fb5;
+
+    --status-idea: #8a7f72;
+    --status-planned: #c77b3f;
+    --status-done: #4a7c59;
+
+    --font-body: 'DM Sans', system-ui, sans-serif;
+    --font-display: 'Playfair Display', Georgia, serif;
+
+    --panel-bg: rgba(250, 249, 247, 0.92);
+    --panel-border: rgba(201, 193, 182, 0.6);
+    --panel-shadow: 0 2px 16px rgba(48, 44, 39, 0.10), 0 0 0 1px rgba(201, 193, 182, 0.3);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: var(--font-body);
+    background: var(--stone-900);
+    color: var(--stone-900);
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+  }
+
+  #map {
+    width: 100%;
+    height: 100%;
+    z-index: 1;
+  }
+
+  /* ── Title badge ── */
+  .title-badge {
+    position: fixed;
+    top: 14px;
+    left: 14px;
+    z-index: 1000;
+    background: var(--panel-bg);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--panel-border);
+    box-shadow: var(--panel-shadow);
+    border-radius: 10px;
+    padding: 10px 16px;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    opacity: 0;
+    transform: translateY(-8px);
+    animation: slideIn 0.4s ease 0.3s forwards;
+  }
+
+  .title-badge h1 {
+    font-family: var(--font-display);
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--stone-900);
+    letter-spacing: -0.02em;
+  }
+
+  .title-badge .subtitle {
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--stone-500);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  /* ── Filter panel ── */
+  .filter-panel {
+    position: fixed;
+    top: 14px;
+    right: 14px;
+    z-index: 1000;
+    background: var(--panel-bg);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--panel-border);
+    box-shadow: var(--panel-shadow);
+    border-radius: 10px;
+    padding: 14px 16px;
+    min-width: 180px;
+    opacity: 0;
+    transform: translateY(-8px);
+    animation: slideIn 0.4s ease 0.4s forwards;
+  }
+
+  .filter-panel .panel-title {
+    font-family: var(--font-display);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--stone-700);
+    letter-spacing: 0.02em;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--stone-200);
+  }
+
+  .filter-group {
+    margin-bottom: 8px;
+  }
+
+  .filter-group:last-child {
+    margin-bottom: 0;
+  }
+
+  .filter-group label {
+    display: block;
+    font-size: 10px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--stone-500);
+    margin-bottom: 4px;
+  }
+
+  .filter-group select {
+    width: 100%;
+    padding: 6px 28px 6px 10px;
+    font-family: var(--font-body);
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--stone-900);
+    background: var(--stone-50);
+    border: 1px solid var(--stone-200);
+    border-radius: 6px;
+    cursor: pointer;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%238a7f72'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    transition: border-color 0.15s;
+  }
+
+  .filter-group select:hover {
+    border-color: var(--stone-300);
+  }
+
+  .filter-group select:focus {
+    outline: none;
+    border-color: var(--trail-green);
+    box-shadow: 0 0 0 2px rgba(74, 124, 89, 0.15);
+  }
+
+  .feature-count {
+    font-size: 11px;
+    color: var(--stone-500);
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--stone-200);
+    text-align: center;
+  }
+
+  .feature-count span {
+    font-weight: 600;
+    color: var(--stone-700);
+  }
+
+  /* ── Leaflet popup overrides ── */
+  .leaflet-popup-content-wrapper {
+    border-radius: 10px !important;
+    box-shadow: 0 4px 20px rgba(48, 44, 39, 0.15), 0 0 0 1px rgba(201, 193, 182, 0.25) !important;
+    padding: 0 !important;
+    overflow: hidden;
+    font-family: var(--font-body);
+  }
+
+  .leaflet-popup-content {
+    margin: 0 !important;
+    min-width: 200px;
+    max-width: 260px;
+  }
+
+  .leaflet-popup-tip {
+    box-shadow: 0 4px 20px rgba(48, 44, 39, 0.10) !important;
+  }
+
+  .popup-inner {
+    padding: 14px 16px;
+  }
+
+  .popup-inner .popup-name {
+    font-family: var(--font-display);
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--stone-900);
+    margin-bottom: 8px;
+    line-height: 1.2;
+  }
+
+  .popup-inner .popup-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-bottom: 8px;
+  }
+
+  .popup-inner .badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 20px;
+    line-height: 1;
+  }
+
+  .badge-status {
+    color: #fff;
+  }
+
+  .badge-status.idea { background: var(--status-idea); }
+  .badge-status.planned { background: var(--status-planned); }
+  .badge-status.done { background: var(--status-done); }
+
+  .badge-sport {
+    background: var(--stone-100);
+    color: var(--stone-700);
+    border: 1px solid var(--stone-200);
+  }
+
+  .popup-inner .popup-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 8px;
+  }
+
+  .popup-inner .tag {
+    font-size: 10px;
+    color: var(--stone-500);
+    background: var(--stone-100);
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-style: italic;
+  }
+
+  .popup-inner .popup-notes {
+    font-size: 12px;
+    color: var(--stone-700);
+    line-height: 1.5;
+    border-top: 1px solid var(--stone-200);
+    padding-top: 8px;
+  }
+
+  /* ── Map tile adjustments ── */
+  .leaflet-tile-pane {
+    filter: saturate(0.85) contrast(1.02);
+  }
+
+  .leaflet-control-zoom a {
+    font-family: var(--font-body) !important;
+    color: var(--stone-700) !important;
+    border-color: var(--stone-200) !important;
+  }
+
+  .leaflet-control-attribution {
+    font-family: var(--font-body) !important;
+    font-size: 10px !important;
+    background: rgba(250, 249, 247, 0.8) !important;
+  }
+
+  /* ── Animations ── */
+  @keyframes slideIn {
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes pulseIn {
+    0% { transform: scale(0); opacity: 0; }
+    70% { transform: scale(1.1); }
+    100% { transform: scale(1); opacity: 1; }
+  }
+
+  /* ── Mobile adjustments ── */
+  @media (max-width: 600px) {
+    .title-badge {
+      top: auto;
+      bottom: 28px;
+      left: 10px;
+      right: auto;
+    }
+
+    .filter-panel {
+      top: 10px;
+      right: 10px;
+      left: auto;
+      min-width: 160px;
+      padding: 10px 12px;
+    }
+
+    .filter-panel .panel-title { font-size: 12px; }
+    .filter-group select { font-size: 12px; padding: 5px 26px 5px 8px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="title-badge">
+  <h1 id="app-title">wishmap</h1>
+  <span class="subtitle">trail atlas</span>
+</div>
+
+<div class="filter-panel">
+  <div class="panel-title">Legend &amp; Filters</div>
+  <div class="filter-group">
+    <label for="sport-filter">Sport</label>
+    <select id="sport-filter"><option value="">All</option></select>
+  </div>
+  <div class="filter-group">
+    <label for="status-filter">Status</label>
+    <select id="status-filter">
+      <option value="">All</option>
+      <option value="idea">Idea</option>
+      <option value="planned">Planned</option>
+      <option value="done">Done</option>
+    </select>
+  </div>
+  <div class="feature-count">
+    <span id="visible-count">0</span> features visible
+  </div>
+</div>
+
+<div id="map"></div>
+
+<script>
+(function () {
+  const STATUS_COLORS = {
+    idea:    '#8a7f72',
+    planned: '#c77b3f',
+    done:    '#4a7c59',
+  };
+
+  const map = L.map('map', {
+    zoomControl: true,
+    attributionControl: true,
+  }).setView([46.9, 9.7], 11);
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; <a href="https://openstreetmap.org/copyright">OpenStreetMap</a>',
+    maxZoom: 19,
+  }).addTo(map);
+
+  let allPins = null;
+  let allRoutes = null;
+  let pinLayer = null;
+  let routeLayer = null;
+  let allBounds = null;
+
+  // ── Fetch data ──
+  Promise.all([
+    fetch('/api/config').then(r => r.json()),
+    fetch('/api/pins').then(r => r.json()),
+    fetch('/api/routes').then(r => r.json()),
+  ]).then(([config, pins, routes]) => {
+    document.title = config.title;
+    document.getElementById('app-title').textContent = config.title;
+
+    allPins = pins;
+    allRoutes = routes;
+
+    populateSportFilter(pins, routes);
+    applyFilters();
+
+    if (allBounds && allBounds.isValid()) {
+      map.fitBounds(allBounds, { padding: [40, 40], maxZoom: 14 });
+    }
+  });
+
+  // ── Populate sport dropdown ──
+  function populateSportFilter(pins, routes) {
+    const sports = new Set();
+    const collect = (fc) => {
+      for (const f of fc.features) {
+        for (const s of f.properties.sport) sports.add(s);
+      }
+    };
+    collect(pins);
+    collect(routes);
+
+    const sel = document.getElementById('sport-filter');
+    Array.from(sports).sort().forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s;
+      opt.textContent = s.replace(/_/g, ' ');
+      sel.appendChild(opt);
+    });
+  }
+
+  // ── Build popup HTML ──
+  function popupHtml(props) {
+    const sportBadges = props.sport
+      .map(s => `<span class="badge badge-sport">${s.replace(/_/g, ' ')}</span>`)
+      .join('');
+
+    const statusBadge = `<span class="badge badge-status ${props.status}">${props.status}</span>`;
+
+    const tags = props.tags.length
+      ? `<div class="popup-tags">${props.tags.map(t => `<span class="tag">${t}</span>`).join('')}</div>`
+      : '';
+
+    const notes = props.notes
+      ? `<div class="popup-notes">${props.notes}</div>`
+      : '';
+
+    return `
+      <div class="popup-inner">
+        <div class="popup-name">${props.name}</div>
+        <div class="popup-meta">${statusBadge}${sportBadges}</div>
+        ${tags}
+        ${notes}
+      </div>`;
+  }
+
+  // ── Filtering logic ──
+  function matchesFilter(props) {
+    const sport = document.getElementById('sport-filter').value;
+    const status = document.getElementById('status-filter').value;
+    if (sport && !props.sport.includes(sport)) return false;
+    if (status && props.status !== status) return false;
+    return true;
+  }
+
+  function applyFilters() {
+    if (!allPins || !allRoutes) return;
+
+    if (pinLayer) { map.removeLayer(pinLayer); }
+    if (routeLayer) { map.removeLayer(routeLayer); }
+
+    const bounds = L.latLngBounds();
+    let count = 0;
+
+    // Routes layer
+    routeLayer = L.geoJSON(allRoutes, {
+      filter: (feature) => matchesFilter(feature.properties),
+      style: (feature) => {
+        const p = feature.properties;
+        const isDashed = p.status === 'idea';
+        return {
+          color: p.color || STATUS_COLORS[p.status] || '#3388ff',
+          weight: p.status === 'done' ? 4 : 3,
+          opacity: p.status === 'idea' ? 0.6 : 0.85,
+          dashArray: isDashed ? '8 6' : null,
+          lineCap: 'round',
+          lineJoin: 'round',
+        };
+      },
+      onEachFeature: (feature, layer) => {
+        layer.bindPopup(popupHtml(feature.properties), { closeButton: false });
+        count++;
+        const b = layer.getBounds();
+        if (b.isValid()) bounds.extend(b);
+      },
+    }).addTo(map);
+
+    // Pins layer
+    pinLayer = L.geoJSON(allPins, {
+      filter: (feature) => matchesFilter(feature.properties),
+      pointToLayer: (feature, latlng) => {
+        const status = feature.properties.status;
+        return L.circleMarker(latlng, {
+          radius: 7,
+          fillColor: STATUS_COLORS[status] || '#8a7f72',
+          color: '#faf9f7',
+          weight: 2,
+          fillOpacity: 0.9,
+        });
+      },
+      onEachFeature: (feature, layer) => {
+        layer.bindPopup(popupHtml(feature.properties), { closeButton: false });
+        count++;
+        bounds.extend(layer.getLatLng());
+      },
+    }).addTo(map);
+
+    // Store full bounds on first render
+    if (!allBounds && bounds.isValid()) {
+      allBounds = bounds;
+    }
+
+    document.getElementById('visible-count').textContent = count;
+  }
+
+  // ── Event listeners ──
+  document.getElementById('sport-filter').addEventListener('change', applyFilters);
+  document.getElementById('status-filter').addEventListener('change', applyFilters);
+})();
+</script>
+</body>
+</html>

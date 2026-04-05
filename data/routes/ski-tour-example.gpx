@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="wishmap"
+     xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>Ski tour example</name>
+    <trkseg>
+      <trkpt lat="46.8300" lon="9.8200"><ele>1200</ele></trkpt>
+      <trkpt lat="46.8320" lon="9.8250"><ele>1350</ele></trkpt>
+      <trkpt lat="46.8350" lon="9.8300"><ele>1500</ele></trkpt>
+      <trkpt lat="46.8380" lon="9.8280"><ele>1650</ele></trkpt>
+      <trkpt lat="46.8400" lon="9.8250"><ele>1800</ele></trkpt>
+      <trkpt lat="46.8420" lon="9.8200"><ele>1950</ele></trkpt>
+      <trkpt lat="46.8450" lon="9.8180"><ele>2100</ele></trkpt>
+      <trkpt lat="46.8470" lon="9.8150"><ele>2250</ele></trkpt>
+    </trkseg>
+  </trk>
+</gpx>
