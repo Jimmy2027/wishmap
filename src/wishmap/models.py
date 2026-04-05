@@ -1,4 +1,5 @@
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, field_validator
 
@@ -49,3 +50,39 @@ class WishmapConfig(BaseModel):
     title: str = "wishmap"
     pins: list[PinConfig] = []
     routes: list[RouteConfig] = []
+
+
+class FeatureProperties(BaseModel):
+    id: str
+    name: str
+    kind: Literal["pin", "route", "route_start"]
+    sport: list[str]
+    status: str
+    tags: list[str]
+    notes: str
+    color: str | None = None
+
+
+class PointGeometry(BaseModel):
+    type: Literal["Point"] = "Point"
+    coordinates: list[float]
+
+
+class LineStringGeometry(BaseModel):
+    type: Literal["LineString"] = "LineString"
+    coordinates: list[list[float]]
+
+
+class Feature(BaseModel):
+    type: Literal["Feature"] = "Feature"
+    geometry: PointGeometry | LineStringGeometry
+    properties: FeatureProperties
+
+
+class FeatureCollection(BaseModel):
+    type: Literal["FeatureCollection"] = "FeatureCollection"
+    features: list[Feature]
+
+
+class ConfigResponse(BaseModel):
+    title: str
