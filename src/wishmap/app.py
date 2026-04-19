@@ -59,7 +59,22 @@ def main() -> None:
     parser.add_argument("--config", type=str, default=None)
     parser.add_argument("--host", type=str, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument(
+        "--sync", action="store_true", help="Sync Garmin activities, then exit"
+    )
     args = parser.parse_args()
     if args.config:
         os.environ["WISHMAP_CONFIG"] = args.config
+
+    if args.sync:
+        from wishmap.garmin import sync
+
+        config_path = resolve_config_path()
+        config = load_config(config_path)
+        if config.garmin is None:
+            print("No [garmin] section in config, nothing to sync")
+            return
+        sync(config.garmin, config_path.parent)
+        return
+
     uvicorn.run("wishmap.app:app", host=args.host, port=args.port, reload=True)

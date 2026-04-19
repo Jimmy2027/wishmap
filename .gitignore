@@ -5,3 +5,5 @@ dist/
 .venv/
 .mypy_cache/
 .pyright/
+.claude/
+data/garmin/

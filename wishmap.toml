@@ -1,4 +1,9 @@
 title = "wishmap"
+includes = ["data/garmin/garmin.toml"]
+
+[garmin]
+username = "hendrik.klug@gmail.com"
+password_pass = "Garmin"
 
 [[pins]]
 id = "pin-1"

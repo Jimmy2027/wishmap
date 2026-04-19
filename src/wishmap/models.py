@@ -46,8 +46,21 @@ class RouteConfig(BaseModel):
         return v
 
 
+class GarminConfig(BaseModel):
+    username: str
+    password: str = ""
+    password_file: str = ""
+    password_pass: str = ""
+    activity_limit: int = 1000
+    gpx_dir: str = "data/garmin"
+    tokenstore: str = "~/.garminconnect"
+    sport_filter: list[str] = []
+
+
 class WishmapConfig(BaseModel):
     title: str = "wishmap"
+    includes: list[str] = []
+    garmin: GarminConfig | None = None
     pins: list[PinConfig] = []
     routes: list[RouteConfig] = []
 
