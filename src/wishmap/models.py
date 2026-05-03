@@ -57,10 +57,22 @@ class GarminConfig(BaseModel):
     sport_filter: list[str] = []
 
 
+class StravaConfig(BaseModel):
+    client_id: str
+    client_secret: str = ""
+    client_secret_file: str = ""
+    client_secret_pass: str = ""
+    activity_limit: int = 1000
+    gpx_dir: str = "data/strava"
+    tokenstore: str = "~/.wishmap/strava_tokens.json"
+    sport_filter: list[str] = []
+
+
 class WishmapConfig(BaseModel):
     title: str = "wishmap"
     includes: list[str] = []
     garmin: GarminConfig | None = None
+    strava: StravaConfig | None = None
     pins: list[PinConfig] = []
     routes: list[RouteConfig] = []
 

@@ -62,9 +62,41 @@ def main() -> None:
     parser.add_argument(
         "--sync", action="store_true", help="Sync Garmin activities, then exit"
     )
+    parser.add_argument(
+        "--sync-strava",
+        action="store_true",
+        help="Sync Strava activities into the local DB, then exit",
+    )
+    parser.add_argument(
+        "--strava-auth",
+        action="store_true",
+        help="Run one-time Strava OAuth setup, then exit",
+    )
     args = parser.parse_args()
     if args.config:
         os.environ["WISHMAP_CONFIG"] = args.config
+
+    if args.strava_auth:
+        from wishmap import strava
+
+        config_path = resolve_config_path()
+        config = load_config(config_path)
+        if config.strava is None:
+            print("No [strava] section in config")
+            return
+        strava.authorize(config.strava)
+        return
+
+    if args.sync_strava:
+        from wishmap import strava
+
+        config_path = resolve_config_path()
+        config = load_config(config_path)
+        if config.strava is None:
+            print("No [strava] section in config, nothing to sync")
+            return
+        strava.sync(config.strava, config_path.parent)
+        return
 
     if args.sync:
         from wishmap.garmin import sync
@@ -74,7 +106,10 @@ def main() -> None:
         if config.garmin is None:
             print("No [garmin] section in config, nothing to sync")
             return
-        sync(config.garmin, config_path.parent)
+        strava_db = None
+        if config.strava is not None:
+            strava_db = config_path.parent / config.strava.gpx_dir / "activities.db"
+        sync(config.garmin, config_path.parent, strava_db)
         return
 
     uvicorn.run("wishmap.app:app", host=args.host, port=args.port, reload=True)

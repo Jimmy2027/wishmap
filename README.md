@@ -69,3 +69,27 @@ Routes reference GPX files. Paths are relative to the TOML file location.
 | `tags` | no | List of strings |
 | `notes` | no | Free text |
 | `color` | routes only | Hex color for the route line |
+
+## Strava enrichment
+
+Garmin activity names are often auto-generated. If you maintain better names
+and sport types on Strava, wishmap can pull them in and override the Garmin
+metadata when activities match (within ±5 min and ±5% distance).
+
+1. Register an API app at https://www.strava.com/settings/api. Set
+   "Authorization Callback Domain" to `localhost`.
+2. Add a `[strava]` section to `wishmap.toml`:
+
+   ```toml
+   [strava]
+   client_id = "12345"
+   client_secret_pass = "Strava"   # or client_secret / client_secret_file
+   ```
+
+3. One-time auth: `uv run wishmap --strava-auth` — opens an authorization URL
+   you visit in a browser; paste the `code` query param from the redirect URL
+   back into the terminal. Tokens are saved to `~/.wishmap/strava_tokens.json`.
+4. Populate the local DB: `uv run wishmap --sync-strava`. Re-run periodically.
+5. `uv run wishmap --sync` (Garmin sync) automatically consults the Strava DB
+   and overrides `name` and `sport` on matched routes; the `strava` tag is
+   appended so you can filter on it.

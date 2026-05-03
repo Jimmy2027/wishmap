@@ -7,3 +7,4 @@ dist/
 .pyright/
 .claude/
 data/garmin/
+data/strava/

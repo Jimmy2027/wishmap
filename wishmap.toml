@@ -1,6 +1,10 @@
 title = "wishmap"
 includes = ["data/garmin/garmin.toml"]
 
+[strava]
+client_id = "230311"
+client_secret_pass = "strava_wishmap_client_secret"
+
 [garmin]
 username = "hendrik.klug@gmail.com"
 password_pass = "Garmin"
