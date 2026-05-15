@@ -37,6 +37,7 @@ class RouteConfig(BaseModel):
     notes: str = ""
     color: str = "#3388ff"
     gpx: str
+    strava_id: int | None = None
 
     @field_validator("sport", mode="before")
     @classmethod
@@ -86,6 +87,7 @@ class FeatureProperties(BaseModel):
     tags: list[str]
     notes: str
     color: str | None = None
+    strava_id: int | None = None
 
 
 class PointGeometry(BaseModel):

@@ -50,6 +50,7 @@ def routes_to_geojson(
                 tags=route.tags,
                 notes=route.notes,
                 color=route.color,
+                strava_id=route.strava_id,
             ),
         ))
     return FeatureCollection(features=features)
@@ -74,6 +75,7 @@ def route_start_pins_to_geojson(
                 tags=route.tags,
                 notes=route.notes,
                 color=route.color,
+                strava_id=route.strava_id,
             ),
         ))
     return features
