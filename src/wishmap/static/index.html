@@ -207,6 +207,51 @@
     background: var(--stone-100);
   }
 
+  /* ── Sync section ── */
+  .sync-section {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--stone-200);
+  }
+
+  .sync-section button {
+    width: 100%;
+    padding: 6px 10px;
+    font-family: var(--font-body);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    color: var(--stone-700);
+    background: var(--stone-50);
+    border: 1px solid var(--stone-200);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s, color 0.15s;
+  }
+
+  .sync-section button:hover:not(:disabled) {
+    border-color: var(--stone-300);
+    background: var(--stone-100);
+  }
+
+  .sync-section button:disabled {
+    cursor: wait;
+    opacity: 0.7;
+  }
+
+  .sync-section button.error {
+    color: var(--trail-red);
+    border-color: var(--trail-red);
+  }
+
+  .sync-section .sync-last {
+    margin-top: 6px;
+    font-size: 10px;
+    color: var(--stone-500);
+    text-align: center;
+    min-height: 12px;
+  }
+
   /* ── Routes drawer ── */
   .routes-drawer {
     position: fixed;
@@ -571,6 +616,10 @@
   <div class="drawer-toggle">
     <button id="drawer-toggle" type="button">☰ Routes</button>
   </div>
+  <div class="sync-section">
+    <button id="sync-button" type="button" title="">↻ Sync</button>
+    <div class="sync-last" id="sync-last"></div>
+  </div>
 </div>
 
 <aside class="routes-drawer" id="routes-drawer" aria-hidden="true">
@@ -647,6 +696,9 @@
   });
 
   // ── Populate sport dropdown ──
+  // Idempotent: clears and rebuilds, preserving the user's current selection
+  // if the sport still exists post-sync. Called once at boot and again after
+  // each successful sync.
   function populateSportFilter(pins, routes) {
     const sports = new Set();
     const collect = (fc) => {
@@ -658,12 +710,18 @@
     collect(routes);
 
     const sel = document.getElementById('sport-filter');
+    const previous = sel.value;
+    // Keep the "All" option at index 0; drop the rest.
+    while (sel.options.length > 1) sel.remove(1);
     Array.from(sports).sort().forEach(s => {
       const opt = document.createElement('option');
       opt.value = s;
       opt.textContent = s.replace(/_/g, ' ');
       sel.appendChild(opt);
     });
+    if (previous && sports.has(previous)) {
+      sel.value = previous;
+    }
   }
 
   // ── Rating helpers ──
@@ -898,6 +956,131 @@
   // ── Event listeners ──
   document.getElementById('sport-filter').addEventListener('change', applyFilters);
   document.getElementById('status-filter').addEventListener('change', applyFilters);
+
+  // ── Sync button ──
+  // POST /api/sync starts a background sync; the response is the current
+  // status. While state === "running" we poll GET /api/sync/status every
+  // 2s. On terminal state we re-fetch /api/pins, /api/routes, /api/ratings
+  // and re-render the map without a tab reload.
+  const syncButton = document.getElementById('sync-button');
+  const syncLast = document.getElementById('sync-last');
+  let syncPollTimer = null;
+
+  function fmtTimeLocal(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function summarizeError(status) {
+    const parts = [];
+    if (status && status.error) parts.push(status.error);
+    for (const [name, svc] of Object.entries((status && status.services) || {})) {
+      if (svc.state === 'error' && svc.error) parts.push(`${name}: ${svc.error}`);
+    }
+    return parts.join('\n');
+  }
+
+  function setSyncButtonState(state, status) {
+    syncButton.classList.remove('error');
+    switch (state) {
+      case 'running':
+        syncButton.textContent = '⟳ Syncing…';
+        syncButton.disabled = true;
+        syncButton.title = '';
+        break;
+      case 'error':
+        syncButton.textContent = '⚠ Sync — error';
+        syncButton.disabled = false;
+        syncButton.classList.add('error');
+        syncButton.title = summarizeError(status) || 'Sync failed';
+        if (status && status.finished_at) {
+          syncLast.textContent = `Last sync: ${fmtTimeLocal(status.finished_at)}`;
+        }
+        break;
+      case 'done':
+        syncButton.textContent = '↻ Sync';
+        syncButton.disabled = false;
+        syncButton.title = '';
+        if (status && status.finished_at) {
+          syncLast.textContent = `Last sync: ${fmtTimeLocal(status.finished_at)}`;
+        }
+        break;
+      case 'idle':
+      default:
+        syncButton.textContent = '↻ Sync';
+        syncButton.disabled = false;
+        syncButton.title = '';
+        break;
+    }
+  }
+
+  async function refreshMapData() {
+    try {
+      const [pins, routes, ratings] = await Promise.all([
+        fetch('/api/pins').then(r => r.json()),
+        fetch('/api/routes').then(r => r.json()),
+        fetch('/api/ratings').then(r => r.json()),
+      ]);
+      allPins = pins;
+      allRoutes = routes;
+      ratingsById.clear();
+      for (const [routeId, r] of Object.entries(ratings)) ratingsById.set(routeId, r);
+      populateSportFilter(pins, routes);
+      applyFilters();
+      document.dispatchEvent(new CustomEvent('ratings-changed'));
+    } catch (e) {
+      console.warn('Map refresh after sync failed', e);
+    }
+  }
+
+  function startSyncPoll() {
+    if (syncPollTimer !== null) return;
+    syncPollTimer = setInterval(async () => {
+      let status;
+      try {
+        status = await fetch('/api/sync/status').then(r => r.json());
+      } catch (e) {
+        console.warn('Sync status poll failed', e);
+        return;
+      }
+      if (status.state === 'running') return;
+      clearInterval(syncPollTimer);
+      syncPollTimer = null;
+      setSyncButtonState(status.state, status);
+      // Even on partial error, one service may have produced new data — refresh.
+      if (status.state === 'done' || status.state === 'error') refreshMapData();
+    }, 2000);
+  }
+
+  syncButton.addEventListener('click', async () => {
+    if (syncButton.disabled) return;
+    setSyncButtonState('running');
+    try {
+      const resp = await fetch('/api/sync', { method: 'POST' });
+      const status = await resp.json();
+      setSyncButtonState(status.state, status);
+      if (status.state === 'running') startSyncPoll();
+    } catch (e) {
+      console.warn('Sync POST failed', e);
+      setSyncButtonState('error', { error: 'Could not reach server' });
+    }
+  });
+
+  // If a sync is already running when the page loads (e.g., tab was
+  // reopened mid-sync), reflect that and start polling.
+  fetch('/api/sync/status')
+    .then(r => r.json())
+    .then(status => {
+      if (status.state === 'running') {
+        setSyncButtonState('running', status);
+        startSyncPoll();
+      } else if (status.finished_at) {
+        syncLast.textContent = `Last sync: ${fmtTimeLocal(status.finished_at)}`;
+      }
+    })
+    .catch(() => {});
 
   // ── Routes drawer ──
   const drawerEl = document.getElementById('routes-drawer');

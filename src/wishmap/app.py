@@ -1,15 +1,19 @@
 import argparse
+import asyncio
+import logging
 import os
+import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
-from wishmap import ratings
+from wishmap import ratings, sync_runner
 from wishmap.config import load_config, resolve_config_path
+from wishmap.exceptions import SyncError
 from wishmap.geojson import pins_to_geojson, route_start_pins_to_geojson, routes_to_geojson
 from wishmap.models import (
     ConfigResponse,
@@ -20,22 +24,58 @@ from wishmap.models import (
 )
 
 _config: WishmapConfig
+_config_path: Path
+_base_path: Path
 _pins_geojson: FeatureCollection
 _routes_geojson: FeatureCollection
 _db_path: Path
 
 
+def _build_data(
+    config: WishmapConfig, base_path: Path
+) -> tuple[FeatureCollection, FeatureCollection]:
+    """Build the pins and routes GeoJSON collections from a loaded config.
+
+    Shared by lifespan startup and reload_data() so the two stay in lockstep.
+    """
+    pins_fc = pins_to_geojson(config.pins)
+    pins_fc.features.extend(route_start_pins_to_geojson(config.routes, base_path))
+    routes_fc = routes_to_geojson(config.routes, base_path)
+    return pins_fc, routes_fc
+
+
+def reload_data() -> None:
+    """Re-read the config and rebuild the in-memory GeoJSON collections.
+
+    Called by sync_runner after a successful sync so the running server
+    picks up new GPX files and garmin.toml entries without a restart.
+    Wraps any failure in SyncError so a corrupt config or missing GPX
+    file surfaces a clean error instead of killing the worker.
+    """
+    global _config, _pins_geojson, _routes_geojson
+    try:
+        config = load_config(_config_path)
+        pins_fc, routes_fc = _build_data(config, _base_path)
+    except SystemExit as e:
+        # config.load_config calls sys.exit(1) on missing GPX. Convert
+        # to SyncError so the sync task records it instead of exiting.
+        raise SyncError(f"Config reload failed: {e}") from e
+    except Exception as e:
+        raise SyncError(f"Config reload failed: {e}") from e
+    _config = config
+    _pins_geojson = pins_fc
+    _routes_geojson = routes_fc
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-    global _config, _pins_geojson, _routes_geojson, _db_path
-    config_path = resolve_config_path()
-    _config = load_config(config_path)
-    base_path = config_path.parent
-    _db_path = base_path / "data" / "wishmap.db"
+    global _config, _config_path, _base_path, _pins_geojson, _routes_geojson, _db_path
+    _config_path = resolve_config_path()
+    _config = load_config(_config_path)
+    _base_path = _config_path.parent
+    _db_path = _base_path / "data" / "wishmap.db"
     _db_path.parent.mkdir(parents=True, exist_ok=True)
-    _pins_geojson = pins_to_geojson(_config.pins)
-    _pins_geojson.features.extend(route_start_pins_to_geojson(_config.routes, base_path))
-    _routes_geojson = routes_to_geojson(_config.routes, base_path)
+    _pins_geojson, _routes_geojson = _build_data(_config, _base_path)
     yield
 
 
@@ -84,6 +124,25 @@ def put_rating(route_id: str, patch: RouteRatingIn) -> RouteRating:
     return RouteRating(**row)
 
 
+@app.post("/api/sync")
+async def post_sync() -> JSONResponse:
+    """Start a background sync of all configured services.
+
+    Returns 202 with current status when a new sync starts; 409 with the
+    current status when one is already running. Idempotent under spam:
+    repeated clicks while running just keep returning the same status.
+    """
+    if not sync_runner.begin():
+        return JSONResponse(status_code=409, content=sync_runner.get_status())
+    asyncio.create_task(sync_runner.run_sync(_config, _base_path))
+    return JSONResponse(status_code=202, content=sync_runner.get_status())
+
+
+@app.get("/api/sync/status")
+async def get_sync_status() -> dict[str, object]:
+    return sync_runner.get_status()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Wishmap server")
     parser.add_argument("--config", type=str, default=None)
@@ -106,40 +165,49 @@ def main() -> None:
     if args.config:
         os.environ["WISHMAP_CONFIG"] = args.config
 
-    if args.strava_auth:
-        from wishmap import strava
+    # CLI modes get logging config here. Server mode inherits uvicorn's
+    # logging setup; sync modules no longer call basicConfig themselves.
+    if args.strava_auth or args.sync_strava or args.sync:
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-        config_path = resolve_config_path()
-        config = load_config(config_path)
-        if config.strava is None:
-            print("No [strava] section in config")
+    try:
+        if args.strava_auth:
+            from wishmap import strava
+
+            config_path = resolve_config_path()
+            config = load_config(config_path)
+            if config.strava is None:
+                print("No [strava] section in config")
+                return
+            strava.authorize(config.strava)
             return
-        strava.authorize(config.strava)
-        return
 
-    if args.sync_strava:
-        from wishmap import strava
+        if args.sync_strava:
+            from wishmap import strava
 
-        config_path = resolve_config_path()
-        config = load_config(config_path)
-        if config.strava is None:
-            print("No [strava] section in config, nothing to sync")
+            config_path = resolve_config_path()
+            config = load_config(config_path)
+            if config.strava is None:
+                print("No [strava] section in config, nothing to sync")
+                return
+            strava.sync(config.strava, config_path.parent)
             return
-        strava.sync(config.strava, config_path.parent)
-        return
 
-    if args.sync:
-        from wishmap.garmin import sync
+        if args.sync:
+            from wishmap.garmin import sync
 
-        config_path = resolve_config_path()
-        config = load_config(config_path)
-        if config.garmin is None:
-            print("No [garmin] section in config, nothing to sync")
+            config_path = resolve_config_path()
+            config = load_config(config_path)
+            if config.garmin is None:
+                print("No [garmin] section in config, nothing to sync")
+                return
+            strava_db = None
+            if config.strava is not None:
+                strava_db = config_path.parent / config.strava.gpx_dir / "activities.db"
+            sync(config.garmin, config_path.parent, strava_db)
             return
-        strava_db = None
-        if config.strava is not None:
-            strava_db = config_path.parent / config.strava.gpx_dir / "activities.db"
-        sync(config.garmin, config_path.parent, strava_db)
-        return
+    except SyncError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
 
     uvicorn.run("wishmap.app:app", host=args.host, port=args.port, reload=True)

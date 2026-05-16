@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from wishmap.exceptions import SyncError
 from wishmap.models import StravaConfig
 
 logger = logging.getLogger("wishmap.strava")
@@ -73,14 +74,28 @@ def _get_client_secret(cfg: StravaConfig) -> str:
     if cfg.client_secret_file:
         return Path(cfg.client_secret_file).expanduser().read_text().strip()
     if cfg.client_secret_pass:
-        result = subprocess.run(
-            ["pass", "show", cfg.client_secret_pass],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            result = subprocess.run(
+                ["pass", "show", cfg.client_secret_pass],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError as e:
+            raise SyncError(
+                "'pass' is not on PATH — install passwordstore.org or use "
+                "client_secret_file / client_secret in the [strava] config."
+            ) from e
+        except subprocess.CalledProcessError as e:
+            stderr = (e.stderr or "").strip() or f"exit {e.returncode}"
+            raise SyncError(
+                f"Could not read Strava client secret from pass entry "
+                f"'{cfg.client_secret_pass}': {stderr}. "
+                "If you're running wishmap as a background service, gpg-agent "
+                "may need to be unlocked in that environment first."
+            ) from e
         return result.stdout.splitlines()[0].strip()
-    raise ValueError(
+    raise SyncError(
         "Strava config needs one of 'client_secret', 'client_secret_file', "
         "or 'client_secret_pass'"
     )
@@ -133,7 +148,7 @@ def _ensure_access_token(cfg: StravaConfig) -> str:
     tokenstore = Path(cfg.tokenstore).expanduser()
     tokens = _load_tokens(tokenstore)
     if tokens is None:
-        raise SystemExit(
+        raise SyncError(
             f"No Strava tokens at {tokenstore}. Run 'wishmap --strava-auth' first."
         )
 
@@ -150,8 +165,6 @@ def _ensure_access_token(cfg: StravaConfig) -> str:
 
 def authorize(cfg: StravaConfig) -> None:
     """Interactive one-time OAuth setup. Prints URL, reads pasted code, saves tokens."""
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-
     params = urllib.parse.urlencode(
         {
             "client_id": cfg.client_id,
@@ -172,7 +185,7 @@ def authorize(cfg: StravaConfig) -> None:
     print()
     code = input("code: ").strip()
     if not code:
-        raise SystemExit("No code provided")
+        raise SyncError("No code provided")
 
     client_secret = _get_client_secret(cfg)
     tokens = _post_form(
@@ -185,7 +198,7 @@ def authorize(cfg: StravaConfig) -> None:
         },
     )
     if "refresh_token" not in tokens:
-        raise SystemExit(f"Token exchange failed: {tokens}")
+        raise SyncError(f"Token exchange failed: {tokens}")
 
     tokenstore = Path(cfg.tokenstore).expanduser()
     _save_tokens(tokenstore, tokens)
@@ -201,7 +214,7 @@ def _fetch_activities(access_token: str, limit: int) -> list[dict[str, Any]]:
         try:
             batch = _get_json(f"{ACTIVITIES_URL}?{params}", access_token)
         except urllib.error.HTTPError as e:
-            raise SystemExit(f"Strava API error on page {page}: {e}") from e
+            raise SyncError(f"Strava API error on page {page}: {e}") from e
         if not isinstance(batch, list) or not batch:
             break
         activities.extend(batch)
@@ -331,9 +344,11 @@ def find_match(
 
 
 def sync(cfg: StravaConfig, base_path: Path) -> None:
-    """Fetch Strava activities and upsert into the local SQLite DB."""
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    """Fetch Strava activities and upsert into the local SQLite DB.
 
+    Raises SyncError if tokens are missing or the Strava API rejects a
+    request so callers (CLI or web) can surface a user-readable message.
+    """
     db_file = _db_path(cfg, base_path)
     db_file.parent.mkdir(parents=True, exist_ok=True)
 

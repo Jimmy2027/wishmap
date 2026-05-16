@@ -14,6 +14,7 @@ from garminconnect import (
 )
 
 from wishmap import strava
+from wishmap.exceptions import SyncError
 from wishmap.models import GarminConfig
 
 logger = logging.getLogger("wishmap.garmin")
@@ -56,14 +57,28 @@ def _get_password(garmin_config: GarminConfig) -> str:
         path = Path(garmin_config.password_file).expanduser()
         return path.read_text().strip()
     if garmin_config.password_pass:
-        result = subprocess.run(
-            ["pass", "show", garmin_config.password_pass],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            result = subprocess.run(
+                ["pass", "show", garmin_config.password_pass],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError as e:
+            raise SyncError(
+                "'pass' is not on PATH — install passwordstore.org or use "
+                "password_file / password in the [garmin] config."
+            ) from e
+        except subprocess.CalledProcessError as e:
+            stderr = (e.stderr or "").strip() or f"exit {e.returncode}"
+            raise SyncError(
+                f"Could not read Garmin password from pass entry "
+                f"'{garmin_config.password_pass}': {stderr}. "
+                "If you're running wishmap as a background service, gpg-agent "
+                "may need to be unlocked in that environment first."
+            ) from e
         return result.stdout.splitlines()[0].strip()
-    raise ValueError(
+    raise SyncError(
         "Garmin config needs one of 'password', 'password_file', or 'password_pass'"
     )
 
@@ -235,21 +250,23 @@ def sync(
     base_path: Path,
     strava_db: Path | None = None,
 ) -> None:
-    """Sync Garmin Connect activities to local GPX files and generate TOML."""
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    """Sync Garmin Connect activities to local GPX files and generate TOML.
 
+    Raises SyncError on authentication failure or rate-limiting so callers
+    (CLI or web) can surface a user-readable message.
+    """
     gpx_dir = base_path / garmin_config.gpx_dir
     gpx_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         client = _authenticate(garmin_config)
     except GarminConnectTooManyRequestsError as e:
-        raise SystemExit(
-            f"Garmin rate-limited: {e}\n"
+        raise SyncError(
+            f"Garmin rate-limited: {e}. "
             "Wait 15-60 minutes before retrying, or try a different network."
         ) from e
     except GarminConnectAuthenticationError as e:
-        raise SystemExit(f"Garmin authentication failed: {e}") from e
+        raise SyncError(f"Garmin authentication failed: {e}") from e
 
     activities = _fetch_activities(client, garmin_config)
 
