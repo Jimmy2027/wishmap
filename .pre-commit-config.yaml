@@ -8,3 +8,10 @@ repos:
         types_or: [python]
         pass_filenames: false
         always_run: true
+      - id: pytest
+        name: pytest
+        entry: uv run pytest
+        language: system
+        types_or: [python]
+        pass_filenames: false
+        always_run: true

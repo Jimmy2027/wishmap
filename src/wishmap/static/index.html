@@ -181,6 +181,151 @@
     color: var(--stone-700);
   }
 
+  .drawer-toggle {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--stone-200);
+  }
+
+  .drawer-toggle button {
+    width: 100%;
+    padding: 6px 10px;
+    font-family: var(--font-body);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    color: var(--stone-700);
+    background: var(--stone-50);
+    border: 1px solid var(--stone-200);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+
+  .drawer-toggle button:hover {
+    border-color: var(--stone-300);
+    background: var(--stone-100);
+  }
+
+  /* ── Routes drawer ── */
+  .routes-drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 320px;
+    max-width: 90vw;
+    z-index: 1100;
+    background: var(--panel-bg);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-left: 1px solid var(--panel-border);
+    box-shadow: -2px 0 16px rgba(48, 44, 39, 0.10);
+    transform: translateX(100%);
+    transition: transform 0.25s ease;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .routes-drawer.open {
+    transform: translateX(0);
+  }
+
+  .drawer-header {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--stone-200);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .drawer-header .drawer-title {
+    flex: 1;
+    font-family: var(--font-display);
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--stone-700);
+  }
+
+  .drawer-header select {
+    padding: 4px 24px 4px 8px;
+    font-family: var(--font-body);
+    font-size: 12px;
+    color: var(--stone-900);
+    background: var(--stone-50);
+    border: 1px solid var(--stone-200);
+    border-radius: 6px;
+    cursor: pointer;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%238a7f72'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+  }
+
+  .drawer-close {
+    background: transparent;
+    border: none;
+    font-size: 20px;
+    line-height: 1;
+    color: var(--stone-500);
+    cursor: pointer;
+    padding: 0 4px;
+  }
+
+  .drawer-close:hover { color: var(--stone-900); }
+
+  .drawer-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px 0;
+  }
+
+  .drawer-entry {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    cursor: pointer;
+    border-left: 3px solid transparent;
+    transition: background 0.1s, border-color 0.1s;
+  }
+
+  .drawer-entry:hover {
+    background: var(--stone-100);
+    border-left-color: var(--trail-orange);
+  }
+
+  .drawer-entry-name {
+    flex: 1;
+    font-size: 13px;
+    color: var(--stone-900);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .drawer-entry-stars {
+    font-size: 12px;
+    color: var(--stone-300);
+    letter-spacing: 1px;
+    flex-shrink: 0;
+  }
+
+  .drawer-entry-stars .filled { color: var(--trail-orange); }
+
+  .drawer-entry-updated {
+    font-size: 11px;
+    color: var(--stone-500);
+    flex-shrink: 0;
+  }
+
+  .drawer-empty {
+    padding: 24px 16px;
+    text-align: center;
+    color: var(--stone-500);
+    font-size: 12px;
+  }
+
   /* ── Leaflet popup overrides ── */
   .leaflet-popup-content-wrapper {
     border-radius: 10px !important;
@@ -295,6 +440,59 @@
     padding-top: 8px;
   }
 
+  /* ── Rating stars ── */
+  .popup-rating-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--stone-200);
+  }
+
+  .popup-rating-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .popup-rating-label {
+    width: 64px;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--stone-500);
+  }
+
+  .popup-rating-stars {
+    display: inline-flex;
+    gap: 2px;
+  }
+
+  .star {
+    cursor: pointer;
+    color: var(--stone-300);
+    font-size: 16px;
+    line-height: 1;
+    user-select: none;
+    transition: color 0.1s;
+  }
+
+  .star.filled {
+    color: var(--trail-orange);
+  }
+
+  .star:hover {
+    color: var(--trail-orange-light);
+  }
+
+  .popup-rating-error {
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--trail-red);
+  }
+
   /* ── Map tile adjustments ── */
   .leaflet-tile-pane {
     filter: saturate(0.85) contrast(1.02);
@@ -370,7 +568,24 @@
   <div class="feature-count">
     <span id="visible-count">0</span> features visible
   </div>
+  <div class="drawer-toggle">
+    <button id="drawer-toggle" type="button">☰ Routes</button>
+  </div>
 </div>
+
+<aside class="routes-drawer" id="routes-drawer" aria-hidden="true">
+  <div class="drawer-header">
+    <span class="drawer-title">Routes</span>
+    <select id="drawer-sort" aria-label="Sort routes by">
+      <option value="fun">Fun</option>
+      <option value="difficulty">Difficulty</option>
+      <option value="scenery">Scenery</option>
+      <option value="updated">Updated</option>
+    </select>
+    <button class="drawer-close" id="drawer-close" type="button" aria-label="Close routes drawer">×</button>
+  </div>
+  <div class="drawer-list" id="drawer-list"></div>
+</aside>
 
 <div id="map"></div>
 
@@ -381,6 +596,11 @@
     planned: '#c77b3f',
     done:    '#4a7c59',
   };
+  const RATING_AXES = [
+    ['Fun', 'fun'],
+    ['Difficulty', 'difficulty'],
+    ['Scenery', 'scenery'],
+  ];
 
   const map = L.map('map', {
     zoomControl: true,
@@ -397,18 +617,26 @@
   let pinLayer = null;
   let routeLayer = null;
   let allBounds = null;
+  // Lifecycle-tied registries cleared+repopulated inside applyFilters.
+  const routeLayers = new Map();
+  const routeStartLayers = new Map();
+  const ratingsById = new Map();
 
   // ── Fetch data ──
   Promise.all([
     fetch('/api/config').then(r => r.json()),
     fetch('/api/pins').then(r => r.json()),
     fetch('/api/routes').then(r => r.json()),
-  ]).then(([config, pins, routes]) => {
+    fetch('/api/ratings').then(r => r.json()),
+  ]).then(([config, pins, routes, ratings]) => {
     document.title = config.title;
     document.getElementById('app-title').textContent = config.title;
 
     allPins = pins;
     allRoutes = routes;
+    for (const [routeId, r] of Object.entries(ratings)) {
+      ratingsById.set(routeId, r);
+    }
 
     populateSportFilter(pins, routes);
     applyFilters();
@@ -438,6 +666,96 @@
     });
   }
 
+  // ── Rating helpers ──
+  function stripStartSuffix(id) {
+    return id.endsWith('-start') ? id.slice(0, -6) : id;
+  }
+
+  function renderStarRow(label, axis, value) {
+    const v = value == null ? 0 : value;
+    let stars = '';
+    for (let i = 1; i <= 5; i++) {
+      const filled = i <= v;
+      stars += `<span class="star${filled ? ' filled' : ''}" data-axis="${axis}" data-value="${i}">${filled ? '★' : '☆'}</span>`;
+    }
+    return `<div class="popup-rating-row"><span class="popup-rating-label">${label}</span><span class="popup-rating-stars">${stars}</span></div>`;
+  }
+
+  function renderRatingRows(routeId) {
+    const r = ratingsById.get(routeId) || {};
+    return RATING_AXES.map(([label, axis]) => renderStarRow(label, axis, r[axis])).join('');
+  }
+
+  function repaintPopupStars(popupEl, routeId) {
+    if (!popupEl || !document.contains(popupEl)) return;
+    const container = popupEl.querySelector('.popup-rating-rows');
+    if (!container) return;
+    container.innerHTML = renderRatingRows(routeId);
+  }
+
+  function showPopupError(popupEl) {
+    if (!popupEl || !document.contains(popupEl)) return;
+    const inner = popupEl.querySelector('.popup-inner');
+    if (!inner) return;
+    if (inner.querySelector('.popup-rating-error')) return;
+    const div = document.createElement('div');
+    div.className = 'popup-rating-error';
+    div.textContent = 'Save failed';
+    inner.appendChild(div);
+  }
+
+  async function handleStarClick(routeId, axis, next, popupEl) {
+    const prior = ratingsById.has(routeId) ? { ...ratingsById.get(routeId) } : null;
+    const optimistic = { ...(prior || {}), [axis]: next };
+    ratingsById.set(routeId, optimistic);
+    repaintPopupStars(popupEl, routeId);
+    document.dispatchEvent(new CustomEvent('ratings-changed'));
+
+    try {
+      const resp = await fetch(`/api/ratings/${encodeURIComponent(routeId)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [axis]: next }),
+      });
+      if (!resp.ok) throw new Error(`PUT failed: ${resp.status}`);
+      const fresh = await resp.json();
+      ratingsById.set(routeId, fresh);
+      repaintPopupStars(popupEl, routeId);
+      document.dispatchEvent(new CustomEvent('ratings-changed'));
+    } catch (err) {
+      console.warn('Rating save failed, reverting', err);
+      if (prior) ratingsById.set(routeId, prior); else ratingsById.delete(routeId);
+      document.dispatchEvent(new CustomEvent('ratings-changed'));
+      repaintPopupStars(popupEl, routeId);
+      showPopupError(popupEl);
+    }
+  }
+
+  // Leaflet 1.9.x rebuilds the popup DOM on every open, so this single
+  // delegated listener picks up clicks on the freshly-attached stars.
+  map.on('popupopen', (e) => {
+    const popupEl = e.popup.getElement();
+    if (!popupEl) return;
+    const inner = popupEl.querySelector('.popup-inner');
+    if (!inner) return;
+    inner.addEventListener('click', (ev) => {
+      const star = ev.target.closest('.star');
+      if (!star) return;
+      // Leaflet's closePopupOnClick (map option, default true) closes the
+      // popup on any click that bubbles to the map container. Stop the click
+      // here so the popup stays open while the user keeps rating.
+      ev.stopPropagation();
+      const propsId = e.popup._source?.feature?.properties?.id;
+      if (!propsId) return;
+      const routeId = stripStartSuffix(propsId);
+      const axis = star.dataset.axis;
+      const value = Number(star.dataset.value);
+      const current = ratingsById.get(routeId)?.[axis] ?? null;
+      const next = current === value ? null : value;
+      handleStarClick(routeId, axis, next, popupEl);
+    });
+  });
+
   // ── Build popup HTML ──
   function popupHtml(props) {
     const sportBadges = props.sport
@@ -455,7 +773,7 @@
       : '';
 
     // Strip `-start` suffix from route_start ids to recover the underlying route id.
-    const routeId = props.id.endsWith('-start') ? props.id.slice(0, -6) : props.id;
+    const routeId = stripStartSuffix(props.id);
     const garminId = routeId.startsWith('garmin-') ? routeId.slice(7) : null;
     const linkChips = [];
     if (garminId) {
@@ -472,6 +790,10 @@
       ? `<div class="popup-links">${linkChips.join('')}</div>`
       : '';
 
+    const ratingRows = props.kind === 'pin'
+      ? ''
+      : `<div class="popup-rating-rows">${renderRatingRows(routeId)}</div>`;
+
     return `
       <div class="popup-inner">
         <div class="popup-name">${props.name}</div>
@@ -479,6 +801,7 @@
         ${links}
         ${tags}
         ${notes}
+        ${ratingRows}
       </div>`;
   }
 
@@ -496,6 +819,10 @@
 
     if (pinLayer) { map.removeLayer(pinLayer); }
     if (routeLayer) { map.removeLayer(routeLayer); }
+
+    // Registries track the new layer lifecycle by construction.
+    routeLayers.clear();
+    routeStartLayers.clear();
 
     const bounds = L.latLngBounds();
     let count = 0;
@@ -516,6 +843,7 @@
         };
       },
       onEachFeature: (feature, layer) => {
+        routeLayers.set(feature.properties.id, layer);
         layer.bindPopup(popupHtml(feature.properties), { closeButton: false });
         count++;
         const b = layer.getBounds();
@@ -549,6 +877,9 @@
         });
       },
       onEachFeature: (feature, layer) => {
+        if (feature.properties.kind === 'route_start') {
+          routeStartLayers.set(stripStartSuffix(feature.properties.id), layer);
+        }
         layer.bindPopup(popupHtml(feature.properties), { closeButton: false });
         count++;
         bounds.extend(layer.getLatLng());
@@ -561,11 +892,121 @@
     }
 
     document.getElementById('visible-count').textContent = count;
+    document.dispatchEvent(new CustomEvent('filters-changed'));
   }
 
   // ── Event listeners ──
   document.getElementById('sport-filter').addEventListener('change', applyFilters);
   document.getElementById('status-filter').addEventListener('change', applyFilters);
+
+  // ── Routes drawer ──
+  const drawerEl = document.getElementById('routes-drawer');
+  const drawerListEl = document.getElementById('drawer-list');
+  const drawerSortEl = document.getElementById('drawer-sort');
+
+  function drawerStars(value) {
+    const v = value == null ? 0 : value;
+    let out = '';
+    for (let i = 1; i <= 5; i++) {
+      const filled = i <= v;
+      out += `<span class="${filled ? 'filled' : ''}">${filled ? '★' : '☆'}</span>`;
+    }
+    return out;
+  }
+
+  function formatUpdated(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '—';
+    return d.toISOString().slice(0, 10);
+  }
+
+  function renderDrawer() {
+    const sort = drawerSortEl.value;
+    const visible = [];
+    for (const [routeId, layer] of routeLayers.entries()) {
+      if (!map.hasLayer(layer)) continue;
+      const name = layer.feature?.properties?.name || routeId;
+      const r = ratingsById.get(routeId) || {};
+      visible.push({ routeId, name, rating: r });
+    }
+
+    visible.sort((a, b) => {
+      if (sort === 'updated') {
+        const av = a.rating.updated_at || '';
+        const bv = b.rating.updated_at || '';
+        if (av === bv) return a.name.localeCompare(b.name);
+        return bv.localeCompare(av);
+      }
+      const av = a.rating[sort];
+      const bv = b.rating[sort];
+      if (av == null && bv == null) return a.name.localeCompare(b.name);
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      if (av === bv) return a.name.localeCompare(b.name);
+      return bv - av;
+    });
+
+    if (visible.length === 0) {
+      drawerListEl.innerHTML = '<div class="drawer-empty">No routes match the current filters.</div>';
+      return;
+    }
+
+    drawerListEl.innerHTML = visible.map(({ routeId, name, rating }) => {
+      const right = sort === 'updated'
+        ? `<span class="drawer-entry-updated">${formatUpdated(rating.updated_at)}</span>`
+        : `<span class="drawer-entry-stars">${drawerStars(rating[sort])}</span>`;
+      return `<div class="drawer-entry" data-route-id="${routeId}">
+        <span class="drawer-entry-name">${name}</span>
+        ${right}
+      </div>`;
+    }).join('');
+  }
+
+  function openDrawer() {
+    drawerEl.classList.add('open');
+    drawerEl.setAttribute('aria-hidden', 'false');
+    renderDrawer();
+  }
+
+  function closeDrawer() {
+    drawerEl.classList.remove('open');
+    drawerEl.setAttribute('aria-hidden', 'true');
+  }
+
+  document.getElementById('drawer-toggle').addEventListener('click', () => {
+    if (drawerEl.classList.contains('open')) closeDrawer(); else openDrawer();
+  });
+  document.getElementById('drawer-close').addEventListener('click', closeDrawer);
+  drawerSortEl.addEventListener('change', renderDrawer);
+
+  drawerListEl.addEventListener('click', (ev) => {
+    const entry = ev.target.closest('.drawer-entry');
+    if (!entry) return;
+    const routeId = entry.dataset.routeId;
+    // The start pin owns the popup we want to open, and gives us a clean
+    // anchor point for flyTo. Fall back to the polyline's bounds center
+    // if the route somehow has no start pin in view.
+    const startLayer = routeStartLayers.get(routeId);
+    if (startLayer) {
+      map.flyTo(startLayer.getLatLng(), 13);
+      startLayer.openPopup();
+      return;
+    }
+    const polyLayer = routeLayers.get(routeId);
+    if (polyLayer) {
+      map.flyToBounds(polyLayer.getBounds(), { maxZoom: 13 });
+      polyLayer.openPopup();
+    }
+  });
+
+  // Re-render the drawer whenever filters change OR ratings change.
+  document.addEventListener('filters-changed', () => {
+    if (drawerEl.classList.contains('open')) renderDrawer();
+  });
+  document.addEventListener('ratings-changed', () => {
+    if (drawerEl.classList.contains('open')) renderDrawer();
+  });
 })();
 </script>
 </body>

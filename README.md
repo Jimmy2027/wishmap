@@ -141,3 +141,34 @@ metadata when activities match (within ±5 min and ±5% distance).
 5. `uv run wishmap --sync` (Garmin sync) automatically consults the Strava DB
    and overrides `name` and `sport` on matched routes; the `strava` tag is
    appended so you can filter on it.
+
+## Ratings
+
+Each route can be rated 1-5 on three axes: Fun, Difficulty, and Scenery. Click
+the stars in a route popup to rate, and use the "☰ Routes" drawer to browse the
+list sorted by any axis. All three axes are independent and optional.
+
+Ratings live in a SQLite file at `data/wishmap.db` (relative to your TOML).
+The file is created on first rating write — no setup command required. Schema
+is one table:
+
+```sql
+CREATE TABLE route_ratings (
+    route_id   TEXT PRIMARY KEY,
+    fun        INTEGER,
+    difficulty INTEGER,
+    scenery    INTEGER,
+    updated_at TEXT NOT NULL
+);
+```
+
+Inspect or back it up with the `sqlite3` CLI:
+
+```bash
+sqlite3 data/wishmap.db "SELECT * FROM route_ratings ORDER BY fun DESC"
+```
+
+The DB is your data — wishmap will never overwrite it. Commit it to git, rsync
+it between machines, or copy it before re-syncing Garmin if you want a safety
+net. Route ids are stable across Garmin re-syncs (`garmin-{activity_id}`), so
+ratings survive `uv run wishmap --sync`.

@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class Status(str, Enum):
@@ -113,3 +113,18 @@ class FeatureCollection(BaseModel):
 
 class ConfigResponse(BaseModel):
     title: str
+
+
+class RouteRatingIn(BaseModel):
+    """PUT body. Any subset of axes may be sent.
+
+    Omitted axes preserve their stored value; explicit None clears that axis.
+    """
+    fun: int | None = Field(None, ge=1, le=5)
+    difficulty: int | None = Field(None, ge=1, le=5)
+    scenery: int | None = Field(None, ge=1, le=5)
+
+
+class RouteRating(RouteRatingIn):
+    """GET response. Server owns updated_at."""
+    updated_at: str
