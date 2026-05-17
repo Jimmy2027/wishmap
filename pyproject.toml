@@ -10,6 +10,8 @@ dependencies = [
     "pydantic>=2.10.0",
     "gpxpy>=1.6.2",
     "garminconnect>=0.3.0",
+    "python-multipart>=0.0.32",
+    "cryptography>=50.0.2",
 ]
 
 [project.scripts]

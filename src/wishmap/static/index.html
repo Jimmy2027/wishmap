@@ -4,8 +4,23 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>wishmap</title>
+<!-- Inline icon: the browser never asks the server for /favicon.ico (a 404
+     on every page load otherwise, the read-only public page included). -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M1 28 11 9l6 11 4-6 10 14z' fill='%234a7c59'/%3E%3C/svg%3E" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<!-- `defer` keeps these third-party scripts off the critical render path: the
+     page chrome paints immediately while Leaflet downloads in parallel, instead
+     of the parser blocking on unpkg.com round-trips. Deferred scripts run in
+     order after parsing but before DOMContentLoaded, so the init below (gated on
+     DOMContentLoaded) is guaranteed L and L.Hotline by the time it fires. -->
+<script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<!-- leaflet-hotline is unmaintained since ~2018; pinned + SRI-guarded.
+     Draws polylines with per-vertex gradient colors on a canvas. Replaces
+     the prior leaflet.heat blob overlay. If it breaks against a future
+     Leaflet, see TODOS.md #4 — recipe is a small custom canvas overlay. -->
+<script defer src="https://unpkg.com/leaflet-hotline@0.4.0/dist/leaflet.hotline.js"
+        integrity="sha384-HO87sic1QNwah1+sgugOpL6qMiiZb7IN9DO1LaUYV7fzsLLZFTOy9naX76d25itW"
+        crossorigin="anonymous"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=Playfair+Display:wght@500;700&display=swap');
 
@@ -32,6 +47,8 @@
     --font-body: 'DM Sans', system-ui, sans-serif;
     --font-display: 'Playfair Display', Georgia, serif;
 
+    --bg-elev: #faf9f7;
+
     --panel-bg: rgba(250, 249, 247, 0.92);
     --panel-border: rgba(201, 193, 182, 0.6);
     --panel-shadow: 0 2px 16px rgba(48, 44, 39, 0.10), 0 0 0 1px rgba(201, 193, 182, 0.3);
@@ -52,43 +69,6 @@
     width: 100%;
     height: 100%;
     z-index: 1;
-  }
-
-  /* ── Title badge ── */
-  .title-badge {
-    position: fixed;
-    top: 14px;
-    left: 14px;
-    z-index: 1000;
-    background: var(--panel-bg);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border: 1px solid var(--panel-border);
-    box-shadow: var(--panel-shadow);
-    border-radius: 10px;
-    padding: 10px 16px;
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    opacity: 0;
-    transform: translateY(-8px);
-    animation: slideIn 0.4s ease 0.3s forwards;
-  }
-
-  .title-badge h1 {
-    font-family: var(--font-display);
-    font-size: 18px;
-    font-weight: 700;
-    color: var(--stone-900);
-    letter-spacing: -0.02em;
-  }
-
-  .title-badge .subtitle {
-    font-size: 11px;
-    font-weight: 400;
-    color: var(--stone-500);
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
   }
 
   /* ── Filter panel ── */
@@ -117,9 +97,38 @@
     color: var(--stone-700);
     letter-spacing: 0.02em;
     margin-bottom: 10px;
-    padding-bottom: 8px;
+    padding: 0 0 8px;
+    border: none;
     border-bottom: 1px solid var(--stone-200);
+    background: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
   }
+
+  .filter-panel .panel-title:focus-visible {
+    outline: 2px solid var(--trail-green);
+    outline-offset: 2px;
+  }
+
+  .filter-panel .panel-chevron {
+    font-size: 11px;
+    color: var(--stone-500);
+    transition: transform 0.2s ease;
+  }
+
+  .filter-panel.collapsed { min-width: 0; }
+  .filter-panel.collapsed .panel-body { display: none; }
+  .filter-panel.collapsed .panel-title {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+  }
+  .filter-panel.collapsed .panel-chevron { transform: rotate(90deg); }
 
   .filter-group {
     margin-bottom: 8px;
@@ -179,6 +188,68 @@
   .feature-count span {
     font-weight: 600;
     color: var(--stone-700);
+  }
+
+  /* ── Sport color legend ── */
+  .sport-legend {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 168px;
+    overflow-y: auto;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11px;
+    color: var(--stone-700);
+    text-transform: capitalize;
+  }
+
+  .legend-swatch {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 1px rgba(48, 44, 39, 0.12);
+  }
+
+  .legend-note {
+    font-size: 10px;
+    font-style: italic;
+    color: var(--stone-500);
+    margin-top: 2px;
+  }
+
+  .legend-note .legend-faint { opacity: 0.55; font-style: normal; }
+
+  /* ── Other users' shared routes (one checkbox per sharing account) ── */
+  .shared-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 120px;
+    overflow-y: auto;
+  }
+  .filter-group label.shared-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin: 0;
+    font-size: 11px;
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--stone-700);
+    cursor: pointer;
+  }
+  .shared-item input { margin: 0; flex-shrink: 0; }
+  .shared-item .shared-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .drawer-toggle {
@@ -252,77 +323,482 @@
     min-height: 12px;
   }
 
-  /* ── Unlock modal ── */
-  .unlock-overlay {
+  /* ── Sync prompt modal (Garmin MFA code) ── */
+  .prompt-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(20, 20, 20, 0.55);
+    background: rgba(20, 20, 20, 0.75);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
     display: none;
     align-items: center;
     justify-content: center;
     z-index: 1500;
   }
-  .unlock-overlay.visible { display: flex; }
+  .prompt-overlay.visible { display: flex; }
 
-  .unlock-modal {
+  .prompt-modal {
+    position: relative;
     background: var(--bg-elev);
-    border: 1px solid var(--stone-300);
+    border: 1px solid var(--stone-700);
+    border-left: 4px solid var(--trail-orange);
     border-radius: 8px;
-    padding: 20px 22px;
-    width: 320px;
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
-    font-size: 13px;
-  }
-  .unlock-modal h3 {
-    margin: 0 0 10px;
+    padding: 24px 28px;
+    width: 380px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5),
+                0 0 0 1px rgba(255, 255, 255, 0.04);
     font-size: 14px;
-    color: var(--stone-700);
+    color: var(--stone-900);
   }
-  .unlock-modal p {
+  .prompt-modal h3 {
     margin: 0 0 12px;
-    color: var(--stone-500);
-    line-height: 1.4;
+    font-family: var(--font-display);
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--stone-900);
+    letter-spacing: 0.2px;
   }
-  .unlock-modal input[type="password"] {
+  .prompt-modal p {
+    margin: 0 0 16px;
+    color: var(--stone-700);
+    line-height: 1.5;
+  }
+  .prompt-modal p code {
+    background: var(--stone-100);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 12px;
+  }
+  .prompt-modal input {
     width: 100%;
-    padding: 8px 10px;
+    padding: 10px 12px;
     border: 1px solid var(--stone-300);
     border-radius: 4px;
     font: inherit;
+    font-size: 14px;
+    background: #fff;
+    color: var(--stone-900);
     box-sizing: border-box;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
   }
-  .unlock-modal .unlock-error {
-    margin-top: 8px;
+  .prompt-modal input:focus {
+    outline: none;
+    border-color: var(--trail-orange);
+    box-shadow: 0 0 0 3px rgba(199, 123, 63, 0.18);
+  }
+  .prompt-modal .prompt-error {
+    margin-top: 10px;
     color: var(--trail-red);
-    min-height: 14px;
-    font-size: 11px;
+    min-height: 16px;
+    font-size: 12px;
+    font-weight: 500;
   }
-  .unlock-modal .unlock-actions {
+  .prompt-modal .prompt-actions {
     display: flex;
     justify-content: flex-end;
-    gap: 8px;
-    margin-top: 14px;
+    gap: 10px;
+    margin-top: 18px;
   }
-  .unlock-modal button {
-    padding: 6px 14px;
-    border: 1px solid var(--stone-400);
+  .prompt-modal button {
+    padding: 8px 18px;
+    border: 1px solid var(--stone-400, var(--stone-500));
     background: var(--bg-elev);
+    color: var(--stone-900);
     border-radius: 4px;
     cursor: pointer;
     font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    transition: background 120ms ease, transform 80ms ease;
   }
-  .unlock-modal button.primary {
-    background: var(--stone-700);
+  .prompt-modal button:hover { background: var(--stone-100); }
+  .prompt-modal button:active { transform: translateY(1px); }
+  .prompt-modal button.primary {
+    background: var(--stone-900);
     color: var(--bg-elev);
-    border-color: var(--stone-700);
+    border-color: var(--stone-900);
   }
-  .unlock-modal button:disabled {
+  .prompt-modal button.primary:hover { background: var(--stone-700); }
+  .prompt-modal button:disabled {
     opacity: 0.6;
     cursor: wait;
   }
 
-  /* Fatal banner — shown when re-prompting can't recover (loopback
-     disabled, agent unreachable). Sits over the map until dismissed. */
+  /* ── Login / register screen ──
+     Shown when GET /api/me says nobody is signed in, and again whenever a
+     request finds the session gone. Deliberately not dismissable: nothing
+     on the map works without an account. Sits above every other overlay. */
+  .auth-overlay {
+    z-index: 1700;
+    background: rgba(20, 20, 20, 0.85);
+  }
+  .auth-modal { border-left-color: var(--trail-green); }
+  .prompt-modal .auth-tabs {
+    display: flex;
+    gap: 4px;
+    margin: 0 0 16px;
+    border-bottom: 1px solid var(--stone-200);
+  }
+  .prompt-modal .auth-tabs button {
+    flex: 1;
+    padding: 8px 0;
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    background: none;
+    color: var(--stone-500);
+  }
+  .prompt-modal .auth-tabs button:hover { background: none; color: var(--stone-900); }
+  .prompt-modal .auth-tabs button[aria-selected="true"] {
+    color: var(--stone-900);
+    border-bottom-color: var(--trail-green);
+  }
+  .auth-modal .auth-message:empty { display: none; }
+  /* Labelled forms: the login screen, the Garmin login and settings.
+     The labels set display, which would beat the hidden attribute. */
+  .auth-modal [hidden], .form-modal [hidden] { display: none !important; }
+  .auth-modal label, .form-modal label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--stone-500);
+    margin-bottom: 12px;
+  }
+  .auth-modal label input, .form-modal label input { margin-top: 5px; }
+  .auth-modal .auth-hint, .form-modal .auth-hint {
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 400;
+    color: var(--stone-500);
+  }
+  .auth-modal .prompt-error, .form-modal .prompt-error { margin-top: 0; }
+  .auth-modal .prompt-actions, .form-modal .prompt-actions { margin-top: 8px; }
+
+  /* ── Garmin login (sync needs the Garmin password) ── */
+  .garmin-modal { border-left-color: #007CC3; }
+  .prompt-modal .prompt-note {
+    font-size: 12px;
+    color: var(--stone-500);
+    margin: -6px 0 14px;
+  }
+
+  /* ── Settings modal ── */
+  .settings-modal {
+    width: 440px;
+    max-width: 92vw;
+    max-height: 90vh;
+    overflow-y: auto;
+    border-left-color: var(--stone-500);
+  }
+  .settings-modal .settings-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .settings-modal section {
+    padding: 14px 0 6px;
+    border-top: 1px solid var(--stone-200);
+  }
+  .settings-modal section:first-of-type { border-top: none; padding-top: 4px; }
+  .settings-modal h4 {
+    margin: 0 0 10px;
+    font-family: var(--font-display);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--stone-900);
+  }
+  .settings-modal p { margin: 0 0 12px; font-size: 13px; }
+  .settings-modal .settings-row { display: flex; gap: 12px; }
+  .settings-modal .settings-row label { flex: 1; }
+  .settings-modal input[type="file"] { padding: 7px 8px; background: var(--stone-50); }
+  .settings-modal .prompt-actions { justify-content: flex-start; flex-wrap: wrap; }
+  .settings-modal .settings-status {
+    font-size: 12px;
+    color: var(--stone-700);
+    min-height: 16px;
+    margin: 6px 0 0;
+  }
+  .settings-modal .settings-status.error { color: var(--trail-red); }
+  .settings-modal p.settings-status { margin: 0 0 12px; }
+  .settings-modal label.settings-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--stone-900);
+    cursor: pointer;
+  }
+  .settings-modal label.settings-check input { width: auto; margin: 0; flex-shrink: 0; }
+  .settings-modal button.danger { color: var(--trail-red); }
+  .settings-modal button.danger:hover { background: var(--trail-red); color: #fff; }
+  .settings-modal input[readonly] {
+    font-size: 12px;
+    background: var(--stone-50);
+    color: var(--stone-700);
+  }
+
+  /* ── Account row (signed-in user + log out) ── */
+  .account-section {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--stone-200);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--stone-500);
+  }
+  .account-section .account-name {
+    font-weight: 600;
+    color: var(--stone-700);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .account-section button {
+    flex-shrink: 0;
+    padding: 3px 8px;
+    font-family: var(--font-body);
+    font-size: 11px;
+    color: var(--stone-700);
+    background: var(--stone-50);
+    border: 1px solid var(--stone-200);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .account-section button:hover { border-color: var(--stone-300); background: var(--stone-100); }
+
+  /* ── Add-route modal ── */
+  .addroute-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(20, 20, 20, 0.75);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 1500;
+  }
+  .addroute-overlay.visible { display: flex; }
+
+  .addroute-modal {
+    position: relative;
+    background: var(--bg-elev);
+    border: 1px solid var(--stone-700);
+    border-left: 4px solid var(--trail-green);
+    border-radius: 8px;
+    padding: 22px 26px;
+    width: 400px;
+    max-width: 92vw;
+    max-height: 90vh;
+    overflow-y: auto;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5),
+                0 0 0 1px rgba(255, 255, 255, 0.04);
+    font-size: 14px;
+    color: var(--stone-900);
+  }
+  .addroute-modal h3 {
+    margin: 0 0 6px;
+    font-family: var(--font-display);
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--stone-900);
+  }
+  .addroute-modal p {
+    margin: 0 0 14px;
+    color: var(--stone-700);
+    line-height: 1.5;
+    font-size: 13px;
+  }
+  .addroute-modal p code {
+    background: var(--stone-100);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 12px;
+  }
+  .addroute-modal label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--stone-500);
+    margin-bottom: 12px;
+  }
+  .addroute-modal .ar-hint {
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 400;
+    color: var(--stone-300);
+  }
+  /* Labels set display, which would beat the hidden attribute (the route
+     form hides its Strava/GPX fields while editing). */
+  .addroute-modal [hidden] { display: none !important; }
+  .addroute-modal input[type="text"],
+  .addroute-modal input[type="url"],
+  .addroute-modal input[type="file"],
+  .addroute-modal input[type="number"],
+  .addroute-modal textarea,
+  .addroute-modal select {
+    width: 100%;
+    margin-top: 5px;
+    padding: 9px 11px;
+    border: 1px solid var(--stone-300);
+    border-radius: 4px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    background: #fff;
+    color: var(--stone-900);
+    box-sizing: border-box;
+  }
+  .addroute-modal textarea { resize: vertical; min-height: 60px; line-height: 1.4; }
+  .addroute-modal input:focus,
+  .addroute-modal textarea:focus,
+  .addroute-modal select:focus {
+    outline: none;
+    border-color: var(--trail-green);
+    box-shadow: 0 0 0 3px rgba(74, 124, 89, 0.18);
+  }
+  .addroute-modal .ar-row {
+    display: flex;
+    gap: 12px;
+  }
+  .addroute-modal .ar-row label { flex: 1; min-width: 0; }
+  .addroute-modal p.ar-note {
+    color: var(--trail-orange);
+    font-size: 12px;
+    margin-top: -4px;
+  }
+  .pin-modal { border-left-color: var(--trail-orange); }
+  .addroute-error {
+    color: var(--trail-red);
+    min-height: 16px;
+    font-size: 12px;
+    font-weight: 500;
+    margin-bottom: 6px;
+  }
+  .addroute-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 4px;
+  }
+  .addroute-modal button {
+    padding: 8px 18px;
+    border: 1px solid var(--stone-500);
+    background: var(--bg-elev);
+    color: var(--stone-900);
+    border-radius: 4px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    transition: background 120ms ease;
+  }
+  .addroute-modal button:hover { background: var(--stone-100); }
+  .addroute-modal button.primary {
+    background: var(--trail-green);
+    color: #fff;
+    border-color: var(--trail-green);
+  }
+  .addroute-modal button.primary:hover { background: var(--trail-green-light); }
+  .addroute-modal button:disabled { opacity: 0.6; cursor: wait; }
+
+  /* Edit / remove buttons inside route and pin popups */
+  .popup-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--stone-200);
+  }
+  .popup-edit {
+    font: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--stone-700);
+    background: transparent;
+    border: 1px solid var(--stone-200);
+    border-radius: 4px;
+    padding: 4px 10px;
+    cursor: pointer;
+    transition: background 120ms ease;
+  }
+  .popup-edit:hover { background: var(--stone-100); border-color: var(--stone-300); }
+  .popup-delete {
+    font: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--trail-red);
+    background: transparent;
+    border: 1px solid var(--stone-200);
+    border-radius: 4px;
+    padding: 4px 10px;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+  }
+  .popup-delete:hover {
+    background: var(--trail-red);
+    color: #fff;
+    border-color: var(--trail-red);
+  }
+
+  /* ── Pin placement: "＋ Add pin" arms one map click ── */
+  .leaflet-container.placing-pin,
+  .leaflet-container.placing-pin .leaflet-interactive { cursor: crosshair; }
+  .sync-section button.active {
+    color: var(--bg-elev);
+    background: var(--trail-orange);
+    border-color: var(--trail-orange);
+  }
+  .sync-section button.active:hover:not(:disabled) {
+    background: var(--trail-orange);
+    border-color: var(--trail-orange);
+  }
+  .place-hint {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1200;
+    display: none;
+    align-items: center;
+    gap: 12px;
+    background: var(--stone-900);
+    color: var(--bg-elev);
+    padding: 8px 10px 8px 16px;
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    font-size: 12px;
+  }
+  .place-hint.visible { display: flex; }
+  .place-hint button {
+    font: inherit;
+    font-size: 11px;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    color: var(--bg-elev);
+    padding: 2px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+
+  /* Fatal banner — sync/login failures that re-prompting won't fix.
+     Sits over the map until dismissed. */
   .fatal-banner {
     position: fixed;
     top: 16px;
@@ -488,11 +964,15 @@
     box-shadow: 0 4px 20px rgba(48, 44, 39, 0.10) !important;
   }
 
-  .popup-inner {
+  /* .popup-shared: another user's route. It borrows the look of
+     .popup-inner but not the class, so the rating/edit handler skips it. */
+  .popup-inner,
+  .popup-shared {
     padding: 14px 16px;
   }
 
-  .popup-inner .popup-name {
+  .popup-inner .popup-name,
+  .popup-shared .popup-name {
     font-family: var(--font-display);
     font-size: 16px;
     font-weight: 700;
@@ -501,14 +981,16 @@
     line-height: 1.2;
   }
 
-  .popup-inner .popup-meta {
+  .popup-inner .popup-meta,
+  .popup-shared .popup-meta {
     display: flex;
     flex-wrap: wrap;
     gap: 5px;
     margin-bottom: 8px;
   }
 
-  .popup-inner .badge {
+  .popup-inner .badge,
+  .popup-shared .badge {
     display: inline-block;
     font-size: 10px;
     font-weight: 600;
@@ -533,14 +1015,16 @@
     border: 1px solid var(--stone-200);
   }
 
-  .popup-inner .popup-tags {
+  .popup-inner .popup-tags,
+  .popup-shared .popup-tags {
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
     margin-bottom: 8px;
   }
 
-  .popup-inner .tag {
+  .popup-inner .tag,
+  .popup-shared .tag {
     font-size: 10px;
     color: var(--stone-500);
     background: var(--stone-100);
@@ -548,6 +1032,17 @@
     border-radius: 4px;
     font-style: italic;
   }
+
+  .popup-shared .popup-owner {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--stone-500);
+    border-top: 1px solid var(--stone-200);
+    padding-top: 8px;
+  }
+  .popup-shared .popup-owner strong { color: var(--stone-700); }
 
   .popup-inner .popup-links {
     display: flex;
@@ -666,13 +1161,6 @@
 
   /* ── Mobile adjustments ── */
   @media (max-width: 600px) {
-    .title-badge {
-      top: auto;
-      bottom: 28px;
-      left: 10px;
-      right: auto;
-    }
-
     .filter-panel {
       top: 10px;
       right: 10px;
@@ -684,17 +1172,40 @@
     .filter-panel .panel-title { font-size: 12px; }
     .filter-group select { font-size: 12px; padding: 5px 26px 5px 8px; }
   }
+
+  /* ── Read-only gate ──
+     A read-only copy of this page (a public link's /u/<token>, or the
+     static `wishmap export`) carries a readonly class on its body. These
+     rules hide every edit affordance (sync, add route/pin, popup
+     edit/remove buttons, the route and pin forms, sync prompts and the
+     Garmin login, the login screen, account row and settings, other
+     users' shared routes) and make
+     rating stars display-only. The DOM nodes stay in place — the IIFE calls
+     getElementById/addEventListener on them, so removing a node would
+     null the lookup and throw. Hide + JS early-returns only; never remove.
+     This CSS also works with JS disabled (no flash of edit controls). */
+  body.readonly .sync-section,
+  body.readonly .account-section,
+  body.readonly .prompt-overlay,
+  body.readonly .garmin-login-overlay,
+  body.readonly .settings-overlay,
+  body.readonly .addroute-overlay,
+  body.readonly .fatal-banner,
+  body.readonly .place-hint,
+  body.readonly .popup-actions,
+  body.readonly .popup-edit,
+  body.readonly .popup-delete,
+  body.readonly #shared-group { display: none !important; }
+  body.readonly .star { pointer-events: none; cursor: default; }
 </style>
 </head>
 <body>
 
-<div class="title-badge">
-  <h1 id="app-title">wishmap</h1>
-  <span class="subtitle">trail atlas</span>
-</div>
-
 <div class="filter-panel">
-  <div class="panel-title">Legend &amp; Filters</div>
+  <button class="panel-title" id="panel-toggle" type="button" aria-expanded="true" aria-controls="panel-body" title="Fold the panel away">
+    <span>Legend &amp; Filters</span><span class="panel-chevron" aria-hidden="true">▾</span>
+  </button>
+  <div class="panel-body" id="panel-body">
   <div class="filter-group">
     <label for="sport-filter">Sport</label>
     <select id="sport-filter"><option value="">All</option></select>
@@ -708,6 +1219,22 @@
       <option value="done">Done</option>
     </select>
   </div>
+  <div class="filter-group">
+    <label for="heat-toggle">Color</label>
+    <select id="heat-toggle">
+      <option value="off">By sport</option>
+      <option value="on">By heat</option>
+    </select>
+  </div>
+  <div class="filter-group" id="sport-legend-group">
+    <label>Legend</label>
+    <div class="sport-legend" id="sport-legend"></div>
+  </div>
+  <!-- Filled from GET /api/shared-users; stays hidden when nobody shares. -->
+  <div class="filter-group" id="shared-group" hidden>
+    <label>Other users</label>
+    <div class="shared-list" id="shared-list"></div>
+  </div>
   <div class="feature-count">
     <span id="visible-count">0</span> features visible
   </div>
@@ -717,6 +1244,17 @@
   <div class="sync-section">
     <button id="sync-button" type="button" title="">↻ Sync</button>
     <div class="sync-last" id="sync-last"></div>
+  </div>
+  <div class="sync-section">
+    <button id="addroute-button" type="button">＋ Add route</button>
+  </div>
+  <div class="sync-section">
+    <button id="addpin-button" type="button" title="Then click the map where the pin goes">＋ Add pin</button>
+  </div>
+  <div class="account-section">
+    <span class="account-name" id="account-name"></span>
+    <button id="settings-button" type="button" title="Account, Garmin, Strava and public link settings">⚙ Settings</button>
+  </div>
   </div>
 </div>
 
@@ -734,19 +1272,249 @@
   <div class="drawer-list" id="drawer-list"></div>
 </aside>
 
-<div class="unlock-overlay" id="unlock-overlay" role="dialog" aria-modal="true" aria-labelledby="unlock-title">
-  <div class="unlock-modal">
-    <h3 id="unlock-title">GPG passphrase needed</h3>
-    <p id="unlock-prompt">Sync needs to unlock your <code>pass</code> entries. Enter your GPG passphrase to warm gpg-agent.</p>
-    <form id="unlock-form">
-      <input id="unlock-input" type="password" autocomplete="current-password" autofocus />
-      <div class="unlock-error" id="unlock-error"></div>
-      <div class="unlock-actions">
-        <button type="button" id="unlock-cancel">Cancel</button>
-        <button type="submit" id="unlock-submit" class="primary">Unlock</button>
+<div class="prompt-overlay" id="mfa-overlay" role="dialog" aria-modal="true" aria-labelledby="mfa-title">
+  <div class="prompt-modal">
+    <h3 id="mfa-title">Garmin MFA code</h3>
+    <p>Garmin sent a one-time code to your email or phone. Enter it to finish logging in; sync then restarts.</p>
+    <form id="mfa-form">
+      <input id="mfa-input" type="text" inputmode="numeric" autocomplete="one-time-code" />
+      <div class="prompt-error" id="mfa-error"></div>
+      <div class="prompt-actions">
+        <button type="button" id="mfa-cancel">Cancel</button>
+        <button type="submit" id="mfa-submit" class="primary">Verify</button>
       </div>
     </form>
   </div>
+</div>
+
+<div class="prompt-overlay garmin-login-overlay" id="garmin-login-overlay" role="dialog" aria-modal="true" aria-labelledby="garmin-login-title">
+  <div class="prompt-modal form-modal garmin-modal">
+    <h3 id="garmin-login-title">Log in to Garmin</h3>
+    <p id="garmin-login-message">Sync needs your Garmin Connect login.</p>
+    <p class="prompt-note">The password is used for this login only and never stored. wishmap keeps the resulting Garmin session encrypted with a key only your wishmap login unlocks.</p>
+    <form id="garmin-login-form">
+      <label>Garmin email
+        <input id="garmin-login-username" type="email" autocomplete="off" autocapitalize="none" spellcheck="false" required />
+      </label>
+      <label>Garmin password
+        <input id="garmin-login-password" type="password" autocomplete="off" required />
+      </label>
+      <div class="prompt-error" id="garmin-login-error"></div>
+      <div class="prompt-actions">
+        <button type="button" id="garmin-login-cancel">Cancel</button>
+        <button type="submit" id="garmin-login-submit" class="primary">Log in &amp; sync</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="prompt-overlay settings-overlay" id="settings-overlay" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+  <div class="prompt-modal form-modal settings-modal">
+    <div class="settings-head">
+      <h3 id="settings-title">Settings</h3>
+      <button type="button" id="settings-close">Close</button>
+    </div>
+
+    <section aria-labelledby="settings-account-title">
+      <h4 id="settings-account-title">Account</h4>
+      <p>Signed in as <strong id="settings-username"></strong>.</p>
+      <form id="password-form">
+        <label>Current password
+          <input id="password-current" type="password" autocomplete="current-password" required />
+        </label>
+        <div class="settings-row">
+          <label>New password <span class="auth-hint">8+ characters</span>
+            <input id="password-new" type="password" autocomplete="new-password" required />
+          </label>
+          <label>Repeat
+            <input id="password-new2" type="password" autocomplete="new-password" required />
+          </label>
+        </div>
+        <div class="prompt-actions">
+          <button type="submit" id="password-submit">Change password</button>
+          <button type="button" id="logout-button">Log out</button>
+        </div>
+        <div class="settings-status" id="password-status" role="status"></div>
+      </form>
+    </section>
+
+    <section aria-labelledby="settings-garmin-title">
+      <h4 id="settings-garmin-title">Garmin Connect</h4>
+      <p class="settings-status" id="garmin-status"></p>
+      <form id="garmin-settings-form">
+        <label>Garmin email
+          <input id="garmin-username" type="email" autocomplete="off" autocapitalize="none" spellcheck="false" required />
+        </label>
+        <div class="settings-row">
+          <label>Activities <span class="auth-hint">newest N</span>
+            <input id="garmin-limit" type="number" min="1" max="20000" step="1" required />
+          </label>
+          <label>Only types <span class="auth-hint">optional</span>
+            <input id="garmin-filter" type="text" autocomplete="off" placeholder="hiking, cycling" />
+          </label>
+        </div>
+        <div class="prompt-actions">
+          <button type="submit" id="garmin-save">Save</button>
+          <button type="button" id="garmin-forget" class="danger">Forget Garmin login</button>
+        </div>
+        <div class="settings-status" id="garmin-settings-status" role="status"></div>
+      </form>
+    </section>
+
+    <section aria-labelledby="settings-strava-title">
+      <h4 id="settings-strava-title">Strava</h4>
+      <p>Upload your Strava data export (<code>export_….zip</code>, or just its <code>activities.csv</code>) so synced Garmin activities take their Strava names and sports.</p>
+      <form id="strava-form">
+        <label>Strava export
+          <input id="strava-file" type="file" accept=".zip,.csv,application/zip,text/csv" required />
+        </label>
+        <div class="prompt-actions">
+          <button type="submit" id="strava-submit">Upload</button>
+        </div>
+        <div class="settings-status" id="strava-status" role="status"></div>
+      </form>
+    </section>
+
+    <section aria-labelledby="settings-share-title">
+      <h4 id="settings-share-title">Share with other users</h4>
+      <label class="settings-check">
+        <input id="settings-share-enabled" type="checkbox" />
+        Make my routes available to other users on this server
+      </label>
+      <p>They can show your routes (name, sport, status, tags; never notes or ratings) on their own map. Synced activities usually start at your home.</p>
+      <div class="settings-status" id="settings-share-status" role="status"></div>
+    </section>
+
+    <section aria-labelledby="settings-link-title">
+      <h4 id="settings-link-title">Public link</h4>
+      <p>Anyone with the link can view your map, read-only and without an account. Rotate replaces the link (the old one stops working); revoke takes it down.</p>
+      <label id="link-url-label" hidden>Link
+        <input id="link-url" type="text" readonly />
+      </label>
+      <div class="prompt-actions">
+        <button type="button" id="link-create" hidden>Create link</button>
+        <button type="button" id="link-copy" hidden>Copy</button>
+        <button type="button" id="link-rotate" hidden>Rotate</button>
+        <button type="button" id="link-revoke" class="danger" hidden>Revoke</button>
+      </div>
+      <div class="settings-status" id="link-status" role="status"></div>
+    </section>
+  </div>
+</div>
+
+<div class="prompt-overlay auth-overlay" id="auth-overlay" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+  <div class="prompt-modal auth-modal">
+    <h3 id="auth-title">wishmap</h3>
+    <div class="auth-tabs" role="tablist">
+      <button type="button" role="tab" id="auth-tab-login" aria-selected="true">Log in</button>
+      <button type="button" role="tab" id="auth-tab-register" aria-selected="false" hidden>Register</button>
+    </div>
+    <p class="auth-message" id="auth-message"></p>
+    <form id="auth-form">
+      <label>Username
+        <input id="auth-username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required />
+      </label>
+      <label>Password <span class="auth-hint" id="auth-password-hint" hidden>at least 8 characters</span>
+        <input id="auth-password" type="password" autocomplete="current-password" required />
+      </label>
+      <label id="auth-password2-label" hidden>Repeat password
+        <input id="auth-password2" type="password" autocomplete="new-password" />
+      </label>
+      <div class="prompt-error" id="auth-error"></div>
+      <div class="prompt-actions">
+        <button type="submit" id="auth-submit" class="primary">Log in</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="addroute-overlay" id="addroute-overlay" role="dialog" aria-modal="true" aria-labelledby="addroute-title">
+  <div class="addroute-modal">
+    <h3 id="addroute-title">Add a route</h3>
+    <p id="addroute-intro">Paste a Strava route link and attach its exported <code>.gpx</code>. Works for any public route — no Strava login needed.</p>
+    <p class="ar-note" id="ar-sync-note" hidden>This route comes from Garmin: the next sync overwrites changes made here.</p>
+    <form id="addroute-form">
+      <label id="ar-url-label">Strava URL
+        <input id="ar-url" type="url" placeholder="https://www.strava.com/routes/…" />
+      </label>
+      <label id="ar-gpx-label">GPX file
+        <input id="ar-gpx" type="file" accept=".gpx,application/gpx+xml,application/xml,text/xml" required />
+      </label>
+      <label>Name
+        <input id="ar-name" type="text" autocomplete="off" maxlength="200" required />
+      </label>
+      <div class="ar-row">
+        <label>Sport
+          <select id="ar-sport"></select>
+        </label>
+        <label>Status
+          <select id="ar-status">
+            <option value="idea">Idea</option>
+            <option value="planned">Planned</option>
+            <option value="done">Done</option>
+          </select>
+        </label>
+      </div>
+      <label>Tags <span class="ar-hint">comma-separated</span>
+        <input id="ar-tags" type="text" autocomplete="off" placeholder="loop, gravel" />
+      </label>
+      <label id="ar-notes-label" hidden>Notes
+        <textarea id="ar-notes" rows="3" maxlength="10000"></textarea>
+      </label>
+      <div class="addroute-error" id="addroute-error"></div>
+      <div class="addroute-actions">
+        <button type="button" id="addroute-cancel">Cancel</button>
+        <button type="submit" id="addroute-submit" class="primary">Add route</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="addroute-overlay" id="pin-overlay" role="dialog" aria-modal="true" aria-labelledby="pin-title">
+  <div class="addroute-modal pin-modal">
+    <h3 id="pin-title">Add a pin</h3>
+    <form id="pin-form">
+      <label>Name
+        <input id="pin-name" type="text" autocomplete="off" maxlength="200" required />
+      </label>
+      <div class="ar-row">
+        <label>Sport
+          <select id="pin-sport"></select>
+        </label>
+        <label>Status
+          <select id="pin-status">
+            <option value="idea">Idea</option>
+            <option value="planned">Planned</option>
+            <option value="done">Done</option>
+          </select>
+        </label>
+      </div>
+      <div class="ar-row">
+        <label>Latitude
+          <input id="pin-lat" type="number" step="any" min="-90" max="90" required />
+        </label>
+        <label>Longitude
+          <input id="pin-lon" type="number" step="any" min="-180" max="180" required />
+        </label>
+      </div>
+      <label>Tags <span class="ar-hint">comma-separated</span>
+        <input id="pin-tags" type="text" autocomplete="off" placeholder="hut, viewpoint" />
+      </label>
+      <label>Notes
+        <textarea id="pin-notes" rows="3" maxlength="10000"></textarea>
+      </label>
+      <div class="addroute-error" id="pin-error"></div>
+      <div class="addroute-actions">
+        <button type="button" id="pin-cancel">Cancel</button>
+        <button type="submit" id="pin-submit" class="primary">Add pin</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="place-hint" id="place-hint" role="status">
+  <span>Click the map where the pin goes.</span>
+  <button type="button" id="place-hint-cancel">Cancel</button>
 </div>
 
 <div class="fatal-banner" id="fatal-banner" role="alert">
@@ -757,12 +1525,132 @@
 <div id="map"></div>
 
 <script>
-(function () {
-  const STATUS_COLORS = {
-    idea:    '#8a7f72',
-    planned: '#c77b3f',
-    done:    '#4a7c59',
+// Init runs on DOMContentLoaded (not immediately) because Leaflet + the hotline
+// plugin now load with `defer` (see <head>). Deferred scripts finish before
+// this event, so L and L.Hotline are defined when the body below executes; the
+// DOMContentLoaded handler also provides the same private scope the old IIFE did.
+document.addEventListener('DOMContentLoaded', function () {
+  // A read-only copy of this page (the static `wishmap export`) is baked
+  // with attributes on the page body; the live server's page has none:
+  //   class="readonly"       READONLY: no accounts, no edit controls
+  //   data-api-base="./api"  API_BASE: where the data lives (default /api)
+  //   data-api-static="1"    API_STATIC: data is <name>.json files
+  // Read once from the markup, so the gate holds before any network call.
+  const READONLY = document.body.classList.contains('readonly');
+  const API_BASE = document.body.dataset.apiBase || '/api';
+  const API_STATIC = document.body.dataset.apiStatic === '1';
+
+  // Path (under API_BASE) of one of the four read endpoints — config,
+  // pins, routes, ratings — which are static JSON files in the export.
+  function dataPath(name) {
+    return API_STATIC ? `/${name}.json` : `/${name}`;
+  }
+
+  // Every request to the server goes through here: prefix API_BASE, and
+  // when the server says the session is gone (401 not_authenticated —
+  // expired, or logged out in another tab) bring back the login screen.
+  // The same for 409 vault_locked: the session is fine, but this browser
+  // lacks the key that unlocks the saved Garmin login (a session from
+  // before that key existed) — logging in again hands it over.
+  // Other 401s/409s (e.g. Garmin rejecting an MFA code, a sync already
+  // running) are the caller's.
+  async function apiFetch(path, opts) {
+    const resp = await fetch(API_BASE + path, opts);
+    if ((resp.status === 401 || resp.status === 409) && !READONLY) {
+      let body = null;
+      try { body = await resp.clone().json(); } catch { /* non-JSON body */ }
+      const detail = body && body.detail;
+      if (resp.status === 401 && detail === 'not_authenticated') onSessionLost();
+      if (resp.status === 409 && detail === 'vault_locked') onVaultLocked();
+    }
+    return resp;
+  }
+
+  // POST/PUT a JSON body through apiFetch.
+  function apiSendJson(method, path, data) {
+    return apiFetch(path, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+  }
+
+  // A user-readable message from an error response body (FastAPI's
+  // `detail` is a string, or a list of validation errors).
+  function errorDetail(body, fallback) {
+    const detail = body && body.detail;
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) {
+      const msgs = detail.map(d => d && d.msg).filter(Boolean);
+      if (msgs.length) return msgs.join('; ');
+    }
+    return fallback;
+  }
+
+  // GET + parse JSON, rejecting on a non-OK status. The data GETs can 500
+  // (e.g. the server can't build the map from a broken GPX); without the
+  // check, callers would store the {detail: ...} error body as if it were
+  // a FeatureCollection and break every later render. The rejection
+  // carries the server's `detail` when it sent one, and the HTTP status.
+  async function fetchJson(path) {
+    const r = await apiFetch(path);
+    if (!r.ok) {
+      let detail = `HTTP ${r.status}`;
+      try {
+        const body = await r.json();
+        if (body && typeof body.detail === 'string') detail = body.detail;
+      } catch { /* non-JSON error body */ }
+      const err = new Error(detail);
+      err.status = r.status;
+      throw err;
+    }
+    return r.json();
+  }
+
+  // Color encodes SPORT; opacity encodes STATUS. Curated palette for the
+  // common wishmap sports; any sport Garmin/Strava emits that isn't listed
+  // falls back to a deterministic hashed hue (sportColor) so it still gets a
+  // stable, distinct color. A pin/route with multiple sports takes the color
+  // of its first sport.
+  const SPORT_COLORS = {
+    hiking:               '#4a7c59',  // trail green
+    walking:              '#7aa384',  // muted green
+    trail_running:        '#c0392b',  // deep red
+    running:              '#e74c3c',  // red
+    biking:               '#2e86de',  // blue
+    mountain_biking:      '#8e44ad',  // purple
+    gravel:               '#e67e22',  // orange
+    ski_touring:          '#16a0c8',  // cyan
+    skiing:               '#5b6bc0',  // indigo
+    cross_country_skiing: '#1abc9c',  // teal
+    snowshoeing:          '#9b59b6',  // violet
+    mountaineering:       '#2c3e50',  // slate
+    swimming:             '#2980b9',  // deep blue
+    sup:                  '#48c9b0',  // aqua
+    climbing:             '#d35400',  // burnt orange
+    kayaking:             '#138d75',  // sea green
+    rowing:               '#117a65',  // dark teal
   };
+
+  // Opacity by status — an idea-only track/pin reads as a lighter draft, but
+  // still clearly visible against the basemap.
+  const STATUS_OPACITY = { idea: 0.55, planned: 0.8, done: 0.9 };
+
+  // Color for a feature from its sport list (first sport wins). Unknown
+  // sports get a stable hashed hue so repeated renders never shift color.
+  function sportColor(sports) {
+    const s = (Array.isArray(sports) && sports.length) ? sports[0] : '';
+    if (SPORT_COLORS[s]) return SPORT_COLORS[s];
+    if (!s) return '#8a7f72';
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return `hsl(${h % 360}, 52%, 45%)`;
+  }
+
+  function statusOpacity(status) {
+    return STATUS_OPACITY[status] ?? 0.85;
+  }
+
   const RATING_AXES = [
     ['Fun', 'fun'],
     ['Difficulty', 'difficulty'],
@@ -774,6 +1662,28 @@
     attributionControl: true,
   }).setView([46.9, 9.7], 11);
 
+  // Dedicated pane for heat-colored hotline polylines. z-index 410 sits
+  // above default overlayPane (400, SVG paths from OFF-mode L.geoJSON)
+  // and below markerPane (600, circle markers). 410 over 400 is
+  // deliberate: even though OFF and ON modes never render simultaneously
+  // today, a tie at z-400 would make any future "both modes at once"
+  // experiment depend on DOM insertion order. Per the
+  // [[leaflet-pane-zorder]] pattern.
+  map.createPane('routeHeatPane').style.zIndex = 410;
+  // pointerEvents is toggled per-mode inside applyFilters():
+  //   ON  → 'auto' so the hotline canvas captures route clicks for popups.
+  //   OFF → 'none' so this empty z-410 pane doesn't absorb clicks meant
+  //         for the SVG polylines in overlayPane (z 400) below it.
+  // Initial value matches the default-off toggle state below.
+  map.getPane('routeHeatPane').style.pointerEvents = 'none';
+
+  // Other users' shared routes get their own pane above the heat canvas
+  // (z 410), so their popups open in both color modes. The pane itself
+  // never takes clicks; only the interactive paths inside it do, so it
+  // doesn't block the user's own routes where no shared line is drawn.
+  map.createPane('sharedRoutesPane').style.zIndex = 420;
+  map.getPane('sharedRoutesPane').style.pointerEvents = 'none';
+
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; <a href="https://openstreetmap.org/copyright">OpenStreetMap</a>',
     maxZoom: 19,
@@ -781,37 +1691,183 @@
 
   let allPins = null;
   let allRoutes = null;
+  // The first load (loadMapData); settles either way, see whenMapLoaded.
+  let mapDataLoaded = null;
   let pinLayer = null;
   let routeLayer = null;
   let allBounds = null;
   // Lifecycle-tied registries cleared+repopulated inside applyFilters.
+  // routeLayers holds whichever per-route layer is currently rendering:
+  // L.geoJSON sublayer (Heat OFF) or L.Hotline (Heat ON). The drawer and
+  // the popupopen handler both read from this map regardless of mode.
   const routeLayers = new Map();
   const routeStartLayers = new Map();
+  // Other users' shared routes: userId -> {username, color, fc}, where fc
+  // is null until the user is first checked (then fetched once and kept
+  // until the page reloads). Route ids are only unique per user, so these
+  // never enter routeLayers / routeStartLayers or the heat maps; they are
+  // drawn by renderSharedRoutes into the one sharedLayer.
+  const sharedRoutes = new Map();
+  // Ids of the users whose routes are shown (checked in the panel).
+  const sharedSelected = new Set();
+  let sharedLayer = null;
   const ratingsById = new Map();
+  // Per-route list of [lat,lon] parts (one per (Multi)LineString line) for
+  // density compute and hotline rendering. Built once at load + after each sync. Keyed by
+  // route id (the same id used in routeLayers / routeStartLayers).
+  const routeHeatCoords = new Map();
+  // Per-route list of Float32Arrays of normalized density values in [0, 1],
+  // one array per part and one value per coord in routeHeatCoords[id]. Used as the per-vertex value passed to
+  // L.hotline so the gradient runs along the actual track.
+  const routeHeatValues = new Map();
+  // Every coord: the server already simplified the lines (~30% of the raw
+  // GPX points), so skipping more would cut corners off the shape.
+  const HEAT_STRIDE = 1;
+  const CELL_DEG = 0.0005;  // ~50m at temperate latitudes — spatial bucket
+  // Dedicated hotline renderer pinned to routeHeatPane. The plugin defines
+  // L.Hotline with `options.renderer: renderer()` evaluated ONCE at module
+  // load with no options — that default renderer puts its canvas in
+  // overlayPane, ignoring the `pane:` we'd pass to L.hotline(). To get the
+  // canvas into routeHeatPane (so the z-index 410 + per-mode pointer-events
+  // toggle actually apply) we construct a renderer with the desired pane
+  // and inject it via HOTLINE_OPTIONS.renderer. Shared across all per-route
+  // hotlines — one canvas, not 859.
+  const hotlineRenderer = L.Hotline.renderer({ pane: 'routeHeatPane' });
+
+  // Hotline render options. Palette matches the wishmap stone+trail
+  // palette: trail-blue (rare) -> trail-orange (mid) -> trail-red (hot).
+  // outlineColor + outlineWidth give the colored line a faint dark casing
+  // so it stays legible against light tiles. weight 3 matches the regular
+  // route polyline weight in OFF mode (idea routes are still 3, done is 4
+  // — we accept a 1px reduction for done in ON mode).
+  const HOTLINE_OPTIONS = {
+    palette: { 0.0: '#3f7fb5', 0.5: '#c77b3f', 1.0: '#b5493a' },
+    min: 0, max: 1,
+    weight: 3,
+    outlineWidth: 1,
+    outlineColor: '#1a1612',
+    renderer: hotlineRenderer,
+  };
+
+  // Pack (latCell, lonCell) into a single int32 key. Offset by 32768 to
+  // keep negative cells nonnegative. Assumes |latCell| < 32768 and
+  // |lonCell| < 32768 — at CELL_DEG=0.0005 that covers ±16° around (0,0),
+  // which fits any single-user regional dataset. If wishmap ever needs to
+  // span hemispheres at this resolution, fall back to a string key. Int
+  // keys + Map<int,int> beat string concat by ~5x on 1.7M lookups.
+  function cellKey(lat, lon) {
+    return ((Math.round(lat / CELL_DEG) + 32768) << 16) |
+           ((Math.round(lon / CELL_DEG) + 32768) & 0xFFFF);
+  }
 
   // ── Fetch data ──
-  Promise.all([
-    fetch('/api/config').then(r => r.json()),
-    fetch('/api/pins').then(r => r.json()),
-    fetch('/api/routes').then(r => r.json()),
-    fetch('/api/ratings').then(r => r.json()),
-  ]).then(([config, pins, routes, ratings]) => {
-    document.title = config.title;
-    document.getElementById('app-title').textContent = config.title;
+  // Called once at boot, after sign-in (or straight away when read-only).
+  function loadMapData() {
+    return mapDataLoaded = Promise.all([
+      fetchJson(dataPath('pins')),
+      fetchJson(dataPath('routes')),
+      fetchJson(dataPath('ratings')),
+    ]).then(([pins, routes, ratings]) => {
+      allPins = pins;
+      allRoutes = routes;
+      for (const [routeId, r] of Object.entries(ratings)) {
+        ratingsById.set(routeId, r);
+      }
 
-    allPins = pins;
-    allRoutes = routes;
-    for (const [routeId, r] of Object.entries(ratings)) {
-      ratingsById.set(routeId, r);
+      buildRouteHeatCoords(allRoutes, HEAT_STRIDE);
+      buildRouteHeatValues(allRoutes);
+      populateSportFilter(pins, routes);
+      applyFilters();
+
+      if (allBounds && allBounds.isValid()) {
+        map.fitBounds(allBounds, { padding: [40, 40], maxZoom: 14 });
+      }
+    }).catch(e => {
+      // The first data GET is where the server builds the map, so a broken
+      // GPX surfaces here. Leave the globals null (applyFilters bails) and
+      // say why the map is empty — unless the session is gone, which the
+      // login screen already says.
+      console.error('Initial map load failed', e);
+      if (e.status !== 401) showFatalBanner(`Could not load map data: ${e.message}`);
+    });
+  }
+
+  // ── Pre-flatten route coords for density compute and hotline rendering ──
+  // Walks every route once, takes every `stride`-th coord, and stores the
+  // [lat,lon] parts in routeHeatCoords keyed by route id: one part for a
+  // LineString, several for a MultiLineString (a track the server split at a
+  // recording gap, so no line is drawn across the jump). The
+  // [lon,lat] -> [lat,lon] swap is the most common bug — Leaflet expects
+  // [lat,lon], GeoJSON LineStrings ship [lon,lat]. Called once at initial
+  // load and again from refreshMapData() after each successful sync.
+  function buildRouteHeatCoords(routesFC, stride) {
+    routeHeatCoords.clear();
+    for (const feature of routesFC.features) {
+      const geom = feature.geometry;
+      const lines = geom.type === 'MultiLineString' ? geom.coordinates : [geom.coordinates];
+      const parts = [];
+      for (const coords of lines) {
+        const part = [];
+        for (let i = 0; i < coords.length; i += stride) {
+          const [lon, lat] = coords[i];
+          part.push([lat, lon]);
+        }
+        if (part.length > 0) parts.push(part);
+      }
+      routeHeatCoords.set(feature.properties.id, parts);
+    }
+  }
+
+  // ── Per-vertex density values for hotline rendering ──
+  // Two-pass O(total coords):
+  //   1. Count how many (stride-sampled) coords from any route fall into each
+  //      ~50m spatial cell.
+  //   2. For each vertex on each route, look up its cell's count and
+  //      log-normalize against the global max into [0, 1].
+  // Log-normalization keeps a few hyper-popular cells (home-base trail-
+  // heads with 50+ overlapping starts) from crushing the rest of the
+  // gradient into pure cold-blue.
+  // Depends on routeHeatCoords being already populated — call this AFTER
+  // buildRouteHeatCoords on the same routesFC.
+  function buildRouteHeatValues(routesFC) {
+    const cellCounts = new Map();
+
+    // Pass 1: global cell-count map
+    for (const feature of routesFC.features) {
+      const parts = routeHeatCoords.get(feature.properties.id);
+      if (!parts) continue;
+      for (const part of parts) {
+        for (const [lat, lon] of part) {
+          const k = cellKey(lat, lon);
+          cellCounts.set(k, (cellCounts.get(k) || 0) + 1);
+        }
+      }
     }
 
-    populateSportFilter(pins, routes);
-    applyFilters();
+    // Find global max for normalization. Guard against single-route
+    // dataset where log(1+1)/log(1+1) = 1 (everything reads as fully
+    // hot, which is fine for a degenerate case).
+    let maxCount = 1;
+    for (const v of cellCounts.values()) if (v > maxCount) maxCount = v;
+    const norm = Math.log(maxCount + 1) || 1;
 
-    if (allBounds && allBounds.isValid()) {
-      map.fitBounds(allBounds, { padding: [40, 40], maxZoom: 14 });
+    // Pass 2: per-vertex normalized value
+    routeHeatValues.clear();
+    for (const feature of routesFC.features) {
+      const parts = routeHeatCoords.get(feature.properties.id);
+      if (!parts) continue;
+      const values = parts.map(part => {
+        const v = new Float32Array(part.length);
+        for (let i = 0; i < part.length; i++) {
+          const [lat, lon] = part[i];
+          const c = cellCounts.get(cellKey(lat, lon)) || 1;
+          v[i] = Math.log(c + 1) / norm;
+        }
+        return v;
+      });
+      routeHeatValues.set(feature.properties.id, values);
     }
-  });
+  }
 
   // ── Populate sport dropdown ──
   // Idempotent: clears and rebuilds, preserving the user's current selection
@@ -819,32 +1875,66 @@
   // each successful sync.
   function populateSportFilter(pins, routes) {
     const sports = new Set();
-    const collect = (fc) => {
+    const collect = (fc, into) => {
       for (const f of fc.features) {
-        for (const s of f.properties.sport) sports.add(s);
+        for (const s of f.properties.sport) into.add(s);
       }
     };
-    collect(pins);
-    collect(routes);
+    collect(pins, sports);
+    collect(routes, sports);
+    // The dropdown also offers the sports of the shown shared routes (they
+    // follow the filter too); the legend stays with the viewer's own, as
+    // shared routes are drawn in their owner's color.
+    const options = new Set(sports);
+    for (const userId of sharedSelected) {
+      const entry = sharedRoutes.get(userId);
+      if (entry && entry.fc) collect(entry.fc, options);
+    }
 
     const sel = document.getElementById('sport-filter');
     const previous = sel.value;
     // Keep the "All" option at index 0; drop the rest.
     while (sel.options.length > 1) sel.remove(1);
-    Array.from(sports).sort().forEach(s => {
+    Array.from(options).sort().forEach(s => {
       const opt = document.createElement('option');
       opt.value = s;
       opt.textContent = s.replace(/_/g, ' ');
       sel.appendChild(opt);
     });
-    if (previous && sports.has(previous)) {
+    if (previous && options.has(previous)) {
       sel.value = previous;
     }
+    renderSportLegend(sports);
+  }
+
+  // ── Sport color legend ──
+  // Shows one swatch per sport currently on the map, using the same
+  // sportColor() the polylines/markers use, plus a note that idea-status
+  // features render faded. Rebuilt alongside the sport dropdown.
+  function renderSportLegend(sports) {
+    const el = document.getElementById('sport-legend');
+    if (!el) return;
+    const items = Array.from(sports).sort().map(s =>
+      `<div class="legend-item"><span class="legend-swatch" style="background:${sportColor([s])}"></span>${esc(s.replace(/_/g, ' '))}</div>`
+    ).join('');
+    el.innerHTML = items +
+      '<div class="legend-note"><span class="legend-faint">Faded</span> = idea</div>';
   }
 
   // ── Rating helpers ──
   function stripStartSuffix(id) {
     return id.endsWith('-start') ? id.slice(0, -6) : id;
+  }
+
+  // Escape user/GPX-derived text before it goes into popup/drawer innerHTML.
+  // A route's name, notes (the pasted Strava URL), and tags can come straight
+  // from the add-route form or an uploaded GPX <name>, so they must never be
+  // rendered as markup. (Feature ids and numeric Strava/Garmin ids used in
+  // hrefs are server-sanitized — web-strava-<digits> / web-<uuid> / ints.)
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
   }
 
   function renderStarRow(label, axis, value) {
@@ -888,7 +1978,7 @@
     document.dispatchEvent(new CustomEvent('ratings-changed'));
 
     try {
-      const resp = await fetch(`/api/ratings/${encodeURIComponent(routeId)}`, {
+      const resp = await apiFetch(`/ratings/${encodeURIComponent(routeId)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ [axis]: next }),
@@ -915,13 +2005,33 @@
     const inner = popupEl.querySelector('.popup-inner');
     if (!inner) return;
     inner.addEventListener('click', (ev) => {
+      // Read-only chokepoint: one return makes ratings display-only AND
+      // disables edit/remove. The controls aren't rendered read-only (and
+      // are hidden by CSS); this guards the handler in case a click still
+      // reaches it.
+      if (READONLY) return;
+      const props = e.popup._source?.feature?.properties;
+      const propsId = props?.id;
+      // Edit / remove buttons. Same stopPropagation reason as the stars
+      // below: keep the click from bubbling to the map.
+      if (ev.target.closest('.popup-edit')) {
+        ev.stopPropagation();
+        if (props) handleEditFeature(props);
+        return;
+      }
+      if (ev.target.closest('.popup-delete')) {
+        ev.stopPropagation();
+        if (!props) return;
+        if (props.kind === 'pin') handleDeletePin(props.id);
+        else handleDeleteRoute(stripStartSuffix(props.id));
+        return;
+      }
       const star = ev.target.closest('.star');
       if (!star) return;
       // Leaflet's closePopupOnClick (map option, default true) closes the
       // popup on any click that bubbles to the map container. Stop the click
       // here so the popup stays open while the user keeps rating.
       ev.stopPropagation();
-      const propsId = e.popup._source?.feature?.properties?.id;
       if (!propsId) return;
       const routeId = stripStartSuffix(propsId);
       const axis = star.dataset.axis;
@@ -935,17 +2045,17 @@
   // ── Build popup HTML ──
   function popupHtml(props) {
     const sportBadges = props.sport
-      .map(s => `<span class="badge badge-sport">${s.replace(/_/g, ' ')}</span>`)
+      .map(s => `<span class="badge badge-sport">${esc(s.replace(/_/g, ' '))}</span>`)
       .join('');
 
-    const statusBadge = `<span class="badge badge-status ${props.status}">${props.status}</span>`;
+    const statusBadge = `<span class="badge badge-status ${esc(props.status)}">${esc(props.status)}</span>`;
 
     const tags = props.tags.length
-      ? `<div class="popup-tags">${props.tags.map(t => `<span class="tag">${t}</span>`).join('')}</div>`
+      ? `<div class="popup-tags">${props.tags.map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>`
       : '';
 
     const notes = props.notes
-      ? `<div class="popup-notes">${props.notes}</div>`
+      ? `<div class="popup-notes">${esc(props.notes)}</div>`
       : '';
 
     // Strip `-start` suffix from route_start ids to recover the underlying route id.
@@ -962,6 +2072,14 @@
         `<a class="popup-link strava" href="https://www.strava.com/activities/${props.strava_id}" target="_blank" rel="noopener">↗ Strava</a>`
       );
     }
+    // Web-added routes carry their Strava *route* id in the feature id
+    // (web-strava-<digits>); link back to the public route page.
+    if (routeId.startsWith('web-strava-')) {
+      const stravaRouteId = routeId.slice('web-strava-'.length);
+      linkChips.push(
+        `<a class="popup-link strava" href="https://www.strava.com/routes/${stravaRouteId}" target="_blank" rel="noopener">↗ Strava route</a>`
+      );
+    }
     const links = linkChips.length
       ? `<div class="popup-links">${linkChips.join('')}</div>`
       : '';
@@ -970,14 +2088,21 @@
       ? ''
       : `<div class="popup-rating-rows">${renderRatingRows(routeId)}</div>`;
 
+    // Every route (line or start pin) and pin of the user's can be edited
+    // and removed; a read-only view gets no buttons at all.
+    const actions = READONLY
+      ? ''
+      : `<div class="popup-actions"><button type="button" class="popup-edit">✎ Edit</button><button type="button" class="popup-delete">✕ ${props.kind === 'pin' ? 'Delete pin' : 'Remove route'}</button></div>`;
+
     return `
       <div class="popup-inner">
-        <div class="popup-name">${props.name}</div>
+        <div class="popup-name">${esc(props.name)}</div>
         <div class="popup-meta">${statusBadge}${sportBadges}</div>
         ${links}
         ${tags}
         ${notes}
         ${ratingRows}
+        ${actions}
       </div>`;
   }
 
@@ -990,53 +2115,128 @@
     return true;
   }
 
+  // Wire popup + hover + registry for one route layer. Used by both render
+  // modes: L.geoJSON sublayers (OFF — sport colors) and L.Hotline layers
+  // (ON — density gradient).
+  //
+  // CRITICAL: assign layer.feature = feature as the first step. L.geoJSON
+  // auto-attaches `feature` to each sublayer it creates; L.Hotline()
+  // constructed directly does NOT. Without this, the popup-rating handler
+  // at line ~1075 (`e.popup._source?.feature?.properties?.id`) and the
+  // drawer at line ~1555 (`layer.feature?.properties?.name`) both silently
+  // break with Heat ON. Setting it unconditionally is safe because the
+  // geoJSON path's `onEachFeature` callback already has it set — this
+  // line is a no-op there.
+  function bindRouteInteractions(layer, feature, bounds) {
+    layer.feature = feature;
+
+    routeLayers.set(feature.properties.id, layer);
+    layer.bindPopup(popupHtml(feature.properties), { closeButton: false });
+    const b = layer.getBounds();
+    if (b.isValid()) bounds.extend(b);
+
+    // Hover highlight. L.Hotline inherits setStyle from L.Polyline but its
+    // canvas renderer (HotlineRenderer extending L.Canvas) doesn't
+    // visually honor weight changes on a per-layer setStyle — hover on a
+    // hotline route degrades to popup-only, no weight bump. For the
+    // L.geoJSON (OFF) path, the existing highlight behavior is preserved
+    // exactly. `routeLayer` is null in the ON branch so the resetStyle
+    // path is naturally a no-op.
+    layer.on('mouseover', () => {
+      if (typeof layer.setStyle === 'function' && layer.options.weight != null) {
+        layer.setStyle({
+          weight: layer.options.weight + 2,
+          opacity: 1,
+        });
+        if (typeof layer.bringToFront === 'function') layer.bringToFront();
+      }
+    });
+    layer.on('mouseout', () => {
+      if (routeLayer && typeof routeLayer.resetStyle === 'function') {
+        routeLayer.resetStyle(layer);
+      }
+    });
+  }
+
   function applyFilters() {
     if (!allPins || !allRoutes) return;
 
     if (pinLayer) { map.removeLayer(pinLayer); }
-    if (routeLayer) { map.removeLayer(routeLayer); }
 
-    // Registries track the new layer lifecycle by construction.
+    // Mode-aware teardown. routeLayer is the parent L.geoJSON (set only
+    // in OFF mode). Removing it cascades to its sublayers — those
+    // sublayers are also registered in routeLayers from the previous
+    // render but Leaflet handles the parent-cascade cleanly. In ON mode
+    // routeLayer is null and each hotline was added independently, so we
+    // remove each from routeLayers. This preserves the
+    // [[applyfilters-registry-lifecycle]] invariant: routeLayers is
+    // cleared and repopulated on every call.
+    if (routeLayer) {
+      map.removeLayer(routeLayer);
+      routeLayer = null;
+    } else if (routeLayers.size > 0) {
+      for (const l of routeLayers.values()) map.removeLayer(l);
+    }
     routeLayers.clear();
     routeStartLayers.clear();
 
     const bounds = L.latLngBounds();
     let count = 0;
 
-    // Routes layer
-    routeLayer = L.geoJSON(allRoutes, {
-      filter: (feature) => matchesFilter(feature.properties),
-      style: (feature) => {
-        const p = feature.properties;
-        const isDashed = p.status === 'idea';
-        return {
-          color: p.color || STATUS_COLORS[p.status] || '#3388ff',
-          weight: p.status === 'done' ? 4 : 3,
-          opacity: p.status === 'idea' ? 0.6 : 0.85,
-          dashArray: isDashed ? '8 6' : null,
-          lineCap: 'round',
-          lineJoin: 'round',
-        };
-      },
-      onEachFeature: (feature, layer) => {
-        routeLayers.set(feature.properties.id, layer);
-        layer.bindPopup(popupHtml(feature.properties), { closeButton: false });
-        count++;
-        const b = layer.getBounds();
-        if (b.isValid()) bounds.extend(b);
+    const heatOn = document.getElementById('heat-toggle').value === 'on';
 
-        layer.on('mouseover', () => {
-          layer.setStyle({
-            weight: layer.options.weight + 2,
-            opacity: 1,
-          });
-          layer.bringToFront();
-        });
-        layer.on('mouseout', () => {
-          routeLayer.resetStyle(layer);
-        });
-      },
-    }).addTo(map);
+    // routeHeatPane is at z 410. In OFF mode it must NOT absorb clicks
+    // intended for the SVG polylines in overlayPane (z 400) below — so
+    // toggle pointer-events on the pane container. In ON mode the canvas
+    // hosting the hotlines lives inside this pane and needs to receive
+    // clicks for popups.
+    map.getPane('routeHeatPane').style.pointerEvents = heatOn ? 'auto' : 'none';
+
+    if (heatOn) {
+      // Heat-colored hotline polylines. Each visible route is its own
+      // L.Hotline layer rendered into routeHeatPane (canvas). While Heat
+      // is ON, the sport color, the status opacity, and the `idea` dashArray
+      // are ALL suppressed — the gradient owns the line. The user's toggle
+      // is the affordance for getting them back.
+      for (const feature of allRoutes.features) {
+        if (!matchesFilter(feature.properties)) continue;
+        const parts = routeHeatCoords.get(feature.properties.id);
+        const values = routeHeatValues.get(feature.properties.id);
+        if (!parts || !values || parts.length === 0) continue;
+
+        // One hotline per route; a split track passes nested arrays, which
+        // the plugin draws as separate parts (no line across the gap).
+        const latlngs = parts.map((part, p) =>
+          part.map(([lat, lon], i) => [lat, lon, values[p][i]]));
+        const layer = L.hotline(latlngs.length === 1 ? latlngs[0] : latlngs,
+                                HOTLINE_OPTIONS).addTo(map);
+        bindRouteInteractions(layer, feature, bounds);
+        count++;
+      }
+    } else {
+      // Sport-colored SVG polylines via L.geoJSON. Color comes from the
+      // route's sport; opacity from its status (idea = faint draft). The
+      // `idea` dashArray and weight-by-status are also preserved.
+      routeLayer = L.geoJSON(allRoutes, {
+        filter: (feature) => matchesFilter(feature.properties),
+        style: (feature) => {
+          const p = feature.properties;
+          const isIdea = p.status === 'idea';
+          return {
+            color: sportColor(p.sport),
+            weight: p.status === 'done' ? 4 : 3,
+            opacity: statusOpacity(p.status),
+            dashArray: isIdea ? '8 6' : null,
+            lineCap: 'round',
+            lineJoin: 'round',
+          };
+        },
+        onEachFeature: (feature, layer) => {
+          bindRouteInteractions(layer, feature, bounds);
+          count++;
+        },
+      }).addTo(map);
+    }
 
     // Pins layer
     pinLayer = L.geoJSON(allPins, {
@@ -1046,10 +2246,10 @@
         const isRouteStart = p.kind === 'route_start';
         return L.circleMarker(latlng, {
           radius: isRouteStart ? 5 : 7,
-          fillColor: isRouteStart ? (p.color || STATUS_COLORS[p.status] || '#8a7f72') : (STATUS_COLORS[p.status] || '#8a7f72'),
+          fillColor: sportColor(p.sport),
           color: isRouteStart ? '#302c27' : '#faf9f7',
           weight: isRouteStart ? 1.5 : 2,
-          fillOpacity: 0.9,
+          fillOpacity: statusOpacity(p.status),
         });
       },
       onEachFeature: (feature, layer) => {
@@ -1069,17 +2269,192 @@
 
     document.getElementById('visible-count').textContent = count;
     document.dispatchEvent(new CustomEvent('filters-changed'));
+    renderSharedRoutes();
   }
 
   // ── Event listeners ──
   document.getElementById('sport-filter').addEventListener('change', applyFilters);
   document.getElementById('status-filter').addEventListener('change', applyFilters);
+  document.getElementById('heat-toggle').addEventListener('change', applyFilters);
+
+  // ── Other users' shared routes ──
+  // Accounts that opted in (Settings > Share with other users) are listed
+  // in the panel; checking one overlays their routes in a per-user color.
+  // They follow the sport/status filters but not the heat colors, aren't
+  // counted as visible features, and carry no notes or ratings (the server
+  // strips them). Never used read-only: a public link or export shows the
+  // owner's map only.
+  //
+  // Colors per shared user, picked to read apart from SPORT_COLORS (no
+  // greens, blues, reds, purples or oranges) and from the heat palette.
+  const SHARED_PALETTE = ['#e6007e', '#6d4c41', '#b59a00', '#1f1f1f', '#f48fb1', '#6b7a1f'];
+  const SHARED_STORAGE_KEY = 'wishmap.sharedUsers';
+  // Remembered ids whose routes failed to load this page view for a
+  // passing reason (5xx, network): unchecked here, but kept in storage.
+  const sharedRetry = new Set();
+  const sharedGroupEl = document.getElementById('shared-group');
+  const sharedListEl = document.getElementById('shared-list');
+
+  function saveSharedSelection() {
+    try {
+      const ids = new Set([...sharedSelected, ...sharedRetry]);
+      localStorage.setItem(SHARED_STORAGE_KEY, JSON.stringify([...ids]));
+    } catch (_) {}
+  }
+
+  function loadSharedSelection() {
+    try {
+      const ids = JSON.parse(localStorage.getItem(SHARED_STORAGE_KEY) || '[]');
+      return Array.isArray(ids) ? ids.filter(Number.isInteger) : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function sharedPopupHtml(props, username) {
+    const sportBadges = props.sport
+      .map(s => `<span class="badge badge-sport">${esc(s.replace(/_/g, ' '))}</span>`)
+      .join('');
+    const statusBadge = `<span class="badge badge-status ${esc(props.status)}">${esc(props.status)}</span>`;
+    const tags = props.tags.length
+      ? `<div class="popup-tags">${props.tags.map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>`
+      : '';
+    // Deliberately not .popup-inner: the popupopen handler (ratings,
+    // edit/remove) must never act on someone else's route.
+    return `
+      <div class="popup-shared">
+        <div class="popup-name">${esc(props.name)}</div>
+        <div class="popup-meta">${statusBadge}${sportBadges}</div>
+        ${tags}
+        <div class="popup-owner">Shared by <strong>${esc(username)}</strong></div>
+      </div>`;
+  }
+
+  // Redraw every checked user's loaded routes. Called at the end of
+  // applyFilters (so the sport/status filters apply) and when a checkbox
+  // changes or a user's routes arrive.
+  function renderSharedRoutes() {
+    if (sharedLayer) {
+      map.removeLayer(sharedLayer);
+      sharedLayer = null;
+    }
+    if (READONLY) return;
+    const features = [];
+    for (const userId of sharedSelected) {
+      const entry = sharedRoutes.get(userId);
+      if (!entry || !entry.fc) continue;
+      for (const feature of entry.fc.features) {
+        if (matchesFilter(feature.properties)) features.push({ feature, entry });
+      }
+    }
+    if (!features.length) return;
+    sharedLayer = L.featureGroup(features.map(({ feature, entry }) => {
+      const style = {
+        color: entry.color,
+        weight: 3,
+        opacity: 0.85,
+        lineCap: 'round',
+        lineJoin: 'round',
+      };
+      const layer = L.geoJSON(feature, { style: () => style, pane: 'sharedRoutesPane' });
+      layer.bindPopup(sharedPopupHtml(feature.properties, entry.username), { closeButton: false });
+      layer.on('mouseover', () => { layer.setStyle({ weight: 5, opacity: 1 }); layer.bringToFront(); });
+      layer.on('mouseout', () => layer.setStyle(style));
+      return layer;
+    })).addTo(map);
+  }
+
+  // Show (fetching once) or hide one user's routes.
+  async function setSharedUserShown(userId, shown, checkbox) {
+    if (shown) sharedSelected.add(userId); else sharedSelected.delete(userId);
+    sharedRetry.delete(userId);
+    saveSharedSelection();
+    const entry = sharedRoutes.get(userId);
+    if (shown && entry && !entry.fc && !entry.loading) {
+      entry.loading = true;
+      checkbox.disabled = true;
+      try {
+        entry.fc = await fetchJson(`/shared/${userId}/routes`);
+        checkbox.title = '';
+      } catch (e) {
+        // 404: they stopped sharing since the list was loaded, so forget
+        // the choice. Anything else (a lost session, a 5xx, the network)
+        // keeps it remembered for the next visit.
+        console.warn(`Loading ${entry.username}'s routes failed`, e);
+        sharedSelected.delete(userId);
+        if (e.status === 404) saveSharedSelection(); else sharedRetry.add(userId);
+        checkbox.checked = false;
+        checkbox.title = e.status === 404
+          ? 'No longer shared.'
+          : `Could not load the routes: ${e.message}`;
+      }
+      entry.loading = false;
+      checkbox.disabled = false;
+    }
+    refreshSharedSports();
+    renderSharedRoutes();
+  }
+
+  // Rebuild the sport dropdown for the shown shared routes. If the chosen
+  // sport is no longer offered (its only user was unchecked), the
+  // dropdown fell back to "All" and the whole map is refiltered.
+  function refreshSharedSports() {
+    if (!allPins || !allRoutes) return;
+    const sel = document.getElementById('sport-filter');
+    const before = sel.value;
+    populateSportFilter(allPins, allRoutes);
+    if (sel.value !== before) applyFilters();
+  }
+
+  // After sign-in: list the accounts that share, and restore the checked
+  // ones from the last visit (ids no longer offered are dropped).
+  async function loadSharedUsers() {
+    if (READONLY) return;
+    let users;
+    try {
+      users = await fetchJson('/shared-users');
+    } catch (e) {
+      console.warn('Loading shared users failed', e);
+      return;
+    }
+    const remembered = new Set(loadSharedSelection());
+    sharedRoutes.clear();
+    sharedSelected.clear();
+    sharedRetry.clear();
+    sharedListEl.replaceChildren();
+    users.forEach((u, i) => {
+      const color = SHARED_PALETTE[i % SHARED_PALETTE.length];
+      sharedRoutes.set(u.id, { username: u.username, color, fc: null, loading: false });
+      const label = document.createElement('label');
+      label.className = 'shared-item';
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      const swatch = document.createElement('span');
+      swatch.className = 'legend-swatch';
+      swatch.style.background = color;
+      const name = document.createElement('span');
+      name.className = 'shared-name';
+      name.textContent = u.username;
+      label.append(box, swatch, name);
+      label.title = u.username;
+      sharedListEl.appendChild(label);
+      box.addEventListener('change', () => setSharedUserShown(u.id, box.checked, box));
+      if (remembered.has(u.id)) {
+        box.checked = true;
+        setSharedUserShown(u.id, true, box);
+      }
+    });
+    saveSharedSelection();
+    sharedGroupEl.hidden = users.length === 0;
+  }
 
   // ── Sync button ──
-  // POST /api/sync starts a background sync; the response is the current
-  // status. While state === "running" we poll GET /api/sync/status every
-  // 2s. On terminal state we re-fetch /api/pins, /api/routes, /api/ratings
-  // and re-render the map without a tab reload.
+  // POST /api/sync starts a background Garmin sync; the response is the
+  // current status. While state === "running" we poll GET /api/sync/status
+  // every 2s. On terminal state we re-fetch /api/pins, /api/routes,
+  // /api/ratings and re-render the map without a tab reload. When Garmin
+  // needs the user's password (needs_garmin_login) or an MFA code
+  // (needs_mfa), the matching modal asks for it and the sync re-runs.
   const syncButton = document.getElementById('sync-button');
   const syncLast = document.getElementById('sync-last');
   let syncPollTimer = null;
@@ -1136,20 +2511,25 @@
 
   async function refreshMapData() {
     try {
+      // Any non-OK response rejects here, before the globals are touched,
+      // so the previous good snapshot stays on the map.
       const [pins, routes, ratings] = await Promise.all([
-        fetch('/api/pins').then(r => r.json()),
-        fetch('/api/routes').then(r => r.json()),
-        fetch('/api/ratings').then(r => r.json()),
+        fetchJson(dataPath('pins')),
+        fetchJson(dataPath('routes')),
+        fetchJson(dataPath('ratings')),
       ]);
       allPins = pins;
       allRoutes = routes;
       ratingsById.clear();
       for (const [routeId, r] of Object.entries(ratings)) ratingsById.set(routeId, r);
+      buildRouteHeatCoords(allRoutes, HEAT_STRIDE);
+      buildRouteHeatValues(allRoutes);
       populateSportFilter(pins, routes);
       applyFilters();
       document.dispatchEvent(new CustomEvent('ratings-changed'));
     } catch (e) {
       console.warn('Map refresh after sync failed', e);
+      if (e.status !== 401) showFatalBanner(`Could not reload map data: ${e.message}`);
     }
   }
 
@@ -1158,7 +2538,7 @@
     syncPollTimer = setInterval(async () => {
       let status;
       try {
-        status = await fetch('/api/sync/status').then(r => r.json());
+        status = await fetchJson('/sync/status');
       } catch (e) {
         console.warn('Sync status poll failed', e);
         return;
@@ -1166,52 +2546,28 @@
       if (status.state === 'running') return;
       clearInterval(syncPollTimer);
       syncPollTimer = null;
-      setSyncButtonState(status.state, status);
-      // Even on partial error, one service may have produced new data — refresh.
-      if (status.state === 'done' || status.state === 'error') refreshMapData();
-      // If sync stalled on a locked gpg-agent, prompt the user to unlock.
-      if (status.needs_passphrase) showUnlockModal();
+      handleSyncFinished(status);
     }, 2000);
   }
 
-  // ── Unlock modal ──
-  // When sync surfaces needs_passphrase=true (gpg-agent has no cached key
-  // and resolve_secret can't read the pass entry), this modal collects the
-  // GPG passphrase and POSTs it to /api/unlock. Three failure modes:
-  //   401 bad_passphrase     → keep modal, decrement attempts, prompt again
-  //   503 loopback_disabled  → close modal, show fatal banner (re-prompt won't help)
-  //   503 agent_unreachable  → close modal, show fatal banner
-  //   500 unknown            → close modal, show fatal banner
-  // On 204, wait for top-level sync state to leave "running" before
-  // re-POSTing /api/sync (A2 fix — the prior sync task is still finishing
-  // its per-service error capture and reload_data).
-  const unlockOverlay = document.getElementById('unlock-overlay');
-  const unlockForm = document.getElementById('unlock-form');
-  const unlockInput = document.getElementById('unlock-input');
-  const unlockError = document.getElementById('unlock-error');
-  const unlockSubmit = document.getElementById('unlock-submit');
-  const unlockCancel = document.getElementById('unlock-cancel');
+  function handleSyncFinished(status) {
+    if (status.needs_garmin_login) {
+      // Not an error to flag on the button: Garmin just wants the password.
+      setSyncButtonState('idle', status);
+      showGarminLoginModal(status.services.garmin.error);
+      return;
+    }
+    setSyncButtonState(status.state, status);
+    if (status.state === 'done') refreshMapData();
+    // If Garmin's login is waiting for a one-time code, ask for it.
+    if (status.needs_mfa) showMfaModal();
+  }
+
+  // ── Fatal banner ──
+  // Surfaces sync/login failures that re-prompting won't fix.
   const fatalBanner = document.getElementById('fatal-banner');
   const fatalBannerText = document.getElementById('fatal-banner-text');
   const fatalBannerDismiss = document.getElementById('fatal-banner-dismiss');
-
-  const MAX_UNLOCK_ATTEMPTS = 3;
-  let unlockAttempts = 0;
-
-  function showUnlockModal(message) {
-    unlockError.textContent = message || '';
-    unlockInput.value = '';
-    unlockOverlay.classList.add('visible');
-    // Defer focus so the browser actually moves the cursor into the input.
-    setTimeout(() => unlockInput.focus(), 0);
-  }
-
-  function hideUnlockModal() {
-    unlockOverlay.classList.remove('visible');
-    unlockInput.value = '';
-    unlockError.textContent = '';
-    unlockSubmit.disabled = false;
-  }
 
   function showFatalBanner(message) {
     fatalBannerText.textContent = message;
@@ -1223,19 +2579,13 @@
     fatalBannerText.textContent = '';
   });
 
-  unlockCancel.addEventListener('click', () => {
-    hideUnlockModal();
-    // Don't reset unlockAttempts — user can click Sync again to retry fresh.
-    setSyncButtonState('error', { error: 'Unlock cancelled.' });
-  });
-
   // Wait for top-level sync state to leave "running". Resolves with the
   // status object on the first non-running tick. Polls every 500ms.
   function waitForSyncIdle() {
     return new Promise((resolve, reject) => {
       const tick = async () => {
         try {
-          const s = await fetch('/api/sync/status').then(r => r.json());
+          const s = await fetchJson('/sync/status');
           if (s.state !== 'running') return resolve(s);
         } catch (e) {
           return reject(e);
@@ -1246,113 +2596,807 @@
     });
   }
 
-  async function postSyncStart() {
-    const resp = await fetch('/api/sync', { method: 'POST' });
-    const status = await resp.json();
+  // Start a sync; `garminPassword` only right after the Garmin login modal.
+  async function postSyncStart(garminPassword) {
+    const resp = garminPassword
+      ? await apiSendJson('POST', '/sync', { garmin_password: garminPassword })
+      : await apiFetch('/sync', { method: 'POST' });
+    // 202 started / 409 already running both carry the current status;
+    // 409 vault_locked is apiFetch's (it brings up the login screen).
+    const status = await resp.json().catch(() => null);
+    if (resp.status === 409 && status && status.detail === 'vault_locked') {
+      const err = new Error('vault_locked');
+      err.userMessage = 'Log in again to sync';
+      throw err;
+    }
+    if ((resp.status !== 202 && resp.status !== 409) || !status) {
+      const err = new Error(`HTTP ${resp.status}`);
+      err.userMessage = errorDetail(status, `Could not start the sync (HTTP ${resp.status})`);
+      throw err;
+    }
     setSyncButtonState(status.state, status);
     if (status.state === 'running') startSyncPoll();
+    else if (resp.status === 409) handleSyncFinished(status);
     return status;
   }
 
-  unlockForm.addEventListener('submit', async (ev) => {
+  // ── Garmin MFA modal ──
+  // When sync surfaces needs_mfa=true, the server holds a half-finished
+  // Garmin login. POST the code to /api/garmin/mfa:
+  //   204 → tokens saved; wait for sync idle and re-POST /api/sync
+  //   401 bad_code → keep modal (server keeps the pending login), retry
+  //   409 no_pending_login (expired / server restarted) → close, banner
+  //   429 / 500 → close, banner
+  const mfaOverlay = document.getElementById('mfa-overlay');
+  const mfaForm = document.getElementById('mfa-form');
+  const mfaInput = document.getElementById('mfa-input');
+  const mfaError = document.getElementById('mfa-error');
+  const mfaSubmit = document.getElementById('mfa-submit');
+  const mfaCancel = document.getElementById('mfa-cancel');
+
+  function showMfaModal(message) {
+    mfaError.textContent = message || '';
+    mfaInput.value = '';
+    mfaSubmit.disabled = false;
+    mfaOverlay.classList.add('visible');
+    setTimeout(() => mfaInput.focus(), 0);
+  }
+
+  function hideMfaModal() {
+    mfaOverlay.classList.remove('visible');
+    mfaInput.value = '';
+    mfaError.textContent = '';
+    mfaSubmit.disabled = false;
+  }
+
+  mfaCancel.addEventListener('click', () => {
+    hideMfaModal();
+    setSyncButtonState('error', { error: 'Garmin MFA cancelled.' });
+  });
+
+  mfaForm.addEventListener('submit', async (ev) => {
     ev.preventDefault();
-    const passphrase = unlockInput.value;
-    if (!passphrase) return;
-    unlockSubmit.disabled = true;
-    unlockError.textContent = '';
+    const code = mfaInput.value.trim();
+    if (!code) return;
+    mfaSubmit.disabled = true;
+    mfaError.textContent = '';
     let resp;
     try {
-      resp = await fetch('/api/unlock', {
+      resp = await apiFetch('/garmin/mfa', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ passphrase }),
+        body: JSON.stringify({ code }),
       });
     } catch (e) {
-      console.warn('Unlock POST failed', e);
-      hideUnlockModal();
+      console.warn('MFA POST failed', e);
+      hideMfaModal();
       showFatalBanner('Could not reach server.');
       return;
     }
-    // Drop the passphrase as soon as the request is in flight.
-    // (unlockInput is cleared by hideUnlockModal too.)
     if (resp.status === 204) {
-      hideUnlockModal();
-      unlockAttempts = 0;
+      hideMfaModal();
       try {
         await waitForSyncIdle();
         await postSyncStart();
       } catch (e) {
-        console.warn('Post-unlock retry failed', e);
-        setSyncButtonState('error', { error: 'Retry after unlock failed.' });
+        console.warn('Post-MFA retry failed', e);
+        setSyncButtonState('error', { error: 'Retry after Garmin login failed.' });
       }
       return;
     }
     let body = {};
     try { body = await resp.json(); } catch { /* ignore */ }
+    if (resp.status === 409 && body.detail === 'vault_locked') {
+      // apiFetch brought up the login screen; the code can't be used now.
+      hideMfaModal();
+      return;
+    }
     if (resp.status === 401) {
-      unlockAttempts += 1;
-      if (unlockAttempts >= MAX_UNLOCK_ATTEMPTS) {
-        hideUnlockModal();
-        unlockAttempts = 0;
-        showFatalBanner('Too many wrong attempts. Click Sync to try again.');
-        setSyncButtonState('error', { error: 'Unlock failed.' });
-        return;
-      }
-      const entry = body.entry ? ` for entry '${body.entry}'` : '';
-      unlockError.textContent = `Wrong passphrase${entry}. Try again.`;
-      unlockSubmit.disabled = false;
-      unlockInput.value = '';
-      unlockInput.focus();
+      mfaError.textContent = 'Garmin rejected that code. Check it and try again.';
+      mfaSubmit.disabled = false;
+      mfaInput.select();
       return;
     }
-    if (resp.status === 503) {
-      hideUnlockModal();
-      unlockAttempts = 0;
-      const hint = body.hint || 'Re-prompting will not help.';
-      showFatalBanner(`Unlock unrecoverable (${body.reason || resp.status}): ${hint}`);
-      setSyncButtonState('error', { error: hint });
-      return;
-    }
-    if (resp.status === 400) {
-      hideUnlockModal();
-      unlockAttempts = 0;
-      showFatalBanner('No pass entries are configured — unlock has nothing to do.');
-      return;
-    }
-    // 500 / unexpected
-    hideUnlockModal();
-    unlockAttempts = 0;
-    const detail = body.detail || `HTTP ${resp.status}`;
-    showFatalBanner(`Unlock failed: ${detail}`);
-    setSyncButtonState('error', { error: detail });
+    hideMfaModal();
+    const msg = resp.status === 409
+      ? 'The Garmin login expired. Click Sync to get a new code.'
+      : resp.status === 429
+        ? 'Garmin is rate-limiting logins. Wait 15–60 minutes, then sync again.'
+        : `Garmin login failed: ${body.detail || `HTTP ${resp.status}`}`;
+    showFatalBanner(msg);
+    setSyncButtonState('error', { error: msg });
   });
 
   syncButton.addEventListener('click', async () => {
     if (syncButton.disabled) return;
     fatalBanner.classList.remove('visible');
-    unlockAttempts = 0;
     setSyncButtonState('running');
     try {
       await postSyncStart();
     } catch (e) {
       console.warn('Sync POST failed', e);
-      setSyncButtonState('error', { error: 'Could not reach server' });
+      setSyncButtonState('error', { error: e.userMessage || 'Could not reach server' });
+    }
+  });
+
+  // ── Garmin login modal ──
+  // Shown when a sync ends with needs_garmin_login: no Garmin account set,
+  // no saved Garmin session, or Garmin rejected the session or password.
+  // Saves the Garmin email if it is new or changed (PUT
+  // /api/integrations/garmin — switching accounts drops the old session),
+  // then re-POSTs /api/sync with the password. The server uses the
+  // password for that one login and keeps only the encrypted session.
+  const garminLoginOverlay = document.getElementById('garmin-login-overlay');
+  const garminLoginForm = document.getElementById('garmin-login-form');
+  const garminLoginMessage = document.getElementById('garmin-login-message');
+  const garminLoginUsername = document.getElementById('garmin-login-username');
+  const garminLoginPassword = document.getElementById('garmin-login-password');
+  const garminLoginError = document.getElementById('garmin-login-error');
+  const garminLoginSubmit = document.getElementById('garmin-login-submit');
+  const garminLoginCancel = document.getElementById('garmin-login-cancel');
+  // The saved Garmin settings (GET /api/integrations/garmin), or null.
+  let garminSettings = null;
+
+  async function loadGarminSettings() {
+    garminSettings = await fetchJson('/integrations/garmin');
+    return garminSettings;
+  }
+
+  async function showGarminLoginModal(message) {
+    garminLoginMessage.textContent = message || 'Sync needs your Garmin Connect login.';
+    garminLoginError.textContent = '';
+    garminLoginPassword.value = '';
+    garminLoginSubmit.disabled = false;
+    garminLoginOverlay.classList.add('visible');
+    try {
+      await loadGarminSettings();
+    } catch (e) {
+      console.warn('Loading Garmin settings failed', e);
+    }
+    garminLoginUsername.value = (garminSettings && garminSettings.username) || '';
+    setTimeout(() => (garminLoginUsername.value ? garminLoginPassword : garminLoginUsername).focus(), 0);
+  }
+
+  function hideGarminLoginModal() {
+    garminLoginOverlay.classList.remove('visible');
+    // Never leave the password lying around in the DOM.
+    garminLoginPassword.value = '';
+    garminLoginError.textContent = '';
+    garminLoginSubmit.disabled = false;
+  }
+
+  garminLoginCancel.addEventListener('click', hideGarminLoginModal);
+
+  garminLoginForm.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const username = garminLoginUsername.value.trim();
+    const password = garminLoginPassword.value;
+    if (!username || !password) return;
+    garminLoginSubmit.disabled = true;
+    garminLoginError.textContent = '';
+    try {
+      // Keep the saved limit/filter when saving the email (a load that
+      // failed when the modal opened is retried here).
+      if (!garminSettings) await loadGarminSettings();
+      if (garminSettings.username !== username) {
+        const resp = await apiSendJson('PUT', '/integrations/garmin', {
+          username,
+          activity_limit: garminSettings.activity_limit,
+          sport_filter: garminSettings.sport_filter,
+        });
+        const body = await resp.json().catch(() => null);
+        if (!resp.ok) throw new Error(errorDetail(body, `HTTP ${resp.status}`));
+        garminSettings = body;
+      }
+    } catch (e) {
+      console.warn('Saving the Garmin account failed', e);
+      garminLoginError.textContent = `Could not save the Garmin account: ${e.message}`;
+      garminLoginSubmit.disabled = false;
+      return;
+    }
+    try {
+      hideGarminLoginModal();
+      setSyncButtonState('running');
+      await waitForSyncIdle();
+      await postSyncStart(password);
+    } catch (e) {
+      console.warn('Garmin login failed', e);
+      hideGarminLoginModal();
+      setSyncButtonState('error', { error: e.userMessage || 'Could not reach the server' });
     }
   });
 
   // If a sync is already running when the page loads (e.g., tab was
-  // reopened mid-sync), reflect that and start polling.
-  fetch('/api/sync/status')
-    .then(r => r.json())
-    .then(status => {
-      if (status.state === 'running') {
-        setSyncButtonState('running', status);
-        startSyncPoll();
-      } else if (status.finished_at) {
-        syncLast.textContent = `Last sync: ${fmtTimeLocal(status.finished_at)}`;
+  // reopened mid-sync), reflect that and start polling. Called at boot once
+  // signed in — never in a read-only copy, which has no sync API (this
+  // would 404 on every public page load, and the .catch would swallow it).
+  function showCurrentSyncStatus() {
+    fetchJson('/sync/status')
+      .then(status => {
+        if (status.state === 'running') {
+          setSyncButtonState('running', status);
+          startSyncPoll();
+        } else if (status.finished_at) {
+          syncLast.textContent = `Last sync: ${fmtTimeLocal(status.finished_at)}`;
+        }
+      })
+      .catch(() => {});
+  }
+
+  // ── Add / edit-route modal ──
+  // Add: paste a Strava route link + attach its exported GPX. POST
+  // multipart to /api/routes; on 201 the server returns the route +
+  // start-pin features, which we splice into the in-memory collections and
+  // re-render — no refetch of all routes (the server already did the
+  // incremental swap).
+  // Edit (✎ in a route's popup): the same form, prefilled, without the
+  // Strava/GPX fields (the geometry never changes) and with the notes.
+  // PATCH /api/routes/{id} with just the changed fields; the answer is the
+  // route's new properties, which replace the old ones on the line and its
+  // start pin.
+  const addrouteOverlay = document.getElementById('addroute-overlay');
+  const addrouteTitle = document.getElementById('addroute-title');
+  const addrouteIntro = document.getElementById('addroute-intro');
+  const arSyncNote = document.getElementById('ar-sync-note');
+  const arUrlLabel = document.getElementById('ar-url-label');
+  const arGpxLabel = document.getElementById('ar-gpx-label');
+  const arNotesLabel = document.getElementById('ar-notes-label');
+  const arNotes = document.getElementById('ar-notes');
+  const addrouteForm = document.getElementById('addroute-form');
+  const addrouteError = document.getElementById('addroute-error');
+  const addrouteSubmit = document.getElementById('addroute-submit');
+  const addrouteCancel = document.getElementById('addroute-cancel');
+  const arUrl = document.getElementById('ar-url');
+  const arGpx = document.getElementById('ar-gpx');
+  const arName = document.getElementById('ar-name');
+  const arSport = document.getElementById('ar-sport');
+  const arStatus = document.getElementById('ar-status');
+  const arTags = document.getElementById('ar-tags');
+
+  function collectSports() {
+    const sports = new Set();
+    for (const fc of [allPins, allRoutes]) {
+      if (!fc) continue;
+      for (const f of fc.features) for (const s of f.properties.sport) sports.add(s);
+    }
+    return Array.from(sports).sort();
+  }
+
+  // Fill a route/pin form's sport <select>: the sports on the map plus the
+  // palette's curated ones (so a fresh account has the common sports too),
+  // and always `current` — the edited feature's sport — which is selected.
+  // Without one, a sport already on the map is.
+  function populateSportSelect(select, current) {
+    const onMap = collectSports();
+    const sports = new Set([...onMap, ...Object.keys(SPORT_COLORS)]);
+    if (current) sports.add(current);
+    const list = Array.from(sports).sort();
+    const choice = current || onMap[0] || 'hiking';
+    select.innerHTML = '';
+    for (const s of list) {
+      const opt = document.createElement('option');
+      opt.value = s;
+      opt.textContent = s.replace(/_/g, ' ');
+      select.appendChild(opt);
+    }
+    select.value = choice;
+  }
+
+  // The forms edit a feature's first sport (the one that colors it); any
+  // further sports it has are kept.
+  function withFirstSport(sports, chosen) {
+    if (sports[0] === chosen) return sports;
+    return [chosen, ...sports.slice(1).filter(s => s !== chosen)];
+  }
+
+  function parseTags(raw) {
+    return raw.split(',').map(t => t.trim()).filter(Boolean);
+  }
+
+  function sameList(a, b) {
+    return a.length === b.length && a.every((x, i) => x === b[i]);
+  }
+
+  // The changed fields of an edit form against the feature's properties
+  // (`fields` holds the form's values), ready to PATCH.
+  function changedFields(props, fields) {
+    const patch = {};
+    if (fields.name !== props.name) patch.name = fields.name;
+    const sport = withFirstSport(props.sport, fields.sport);
+    if (!sameList(sport, props.sport)) patch.sport = sport;
+    if (fields.status !== props.status) patch.status = fields.status;
+    if (!sameList(fields.tags, props.tags)) patch.tags = fields.tags;
+    if (fields.notes !== props.notes) patch.notes = fields.notes;
+    return patch;
+  }
+
+  // Best-effort name prefill from the uploaded GPX <name>. GPX elements live
+  // in the topografix default namespace, so match by local name via
+  // getElementsByTagNameNS('*', …) — a plain querySelector('name') silently
+  // misses namespaced nodes. Only fills when the user hasn't typed a name.
+  function prefillNameFromGpx(file) {
+    if (arName.value.trim()) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const doc = new DOMParser().parseFromString(String(reader.result), 'application/xml');
+        let nm = '';
+        const trk = doc.getElementsByTagNameNS('*', 'trk')[0];
+        if (trk) {
+          const n = trk.getElementsByTagNameNS('*', 'name')[0];
+          if (n) nm = (n.textContent || '').trim();
+        }
+        if (!nm) {
+          const meta = doc.getElementsByTagNameNS('*', 'metadata')[0];
+          if (meta) {
+            const n = meta.getElementsByTagNameNS('*', 'name')[0];
+            if (n) nm = (n.textContent || '').trim();
+          }
+        }
+        if (nm && !arName.value.trim()) arName.value = nm;
+      } catch (err) { /* prefill is best-effort */ }
+    };
+    reader.readAsText(file);
+  }
+
+  // The id of the route the modal is editing; null while it adds one.
+  let editingRouteId = null;
+
+  // Switch the modal between adding (editId null) and editing a route.
+  function setRouteModalMode(editId) {
+    editingRouteId = editId;
+    const editing = editId !== null;
+    addrouteTitle.textContent = editing ? 'Edit route' : 'Add a route';
+    addrouteIntro.hidden = editing;
+    arUrlLabel.hidden = editing;
+    arGpxLabel.hidden = editing;
+    arGpx.required = !editing;
+    arNotesLabel.hidden = !editing;
+    // Garmin routes are rewritten by every sync, edits included.
+    arSyncNote.hidden = !(editing && editId.startsWith('garmin-'));
+    addrouteSubmit.textContent = editing ? 'Save' : 'Add route';
+  }
+
+  function showAddRouteModal() {
+    setRouteModalMode(null);
+    addrouteError.textContent = '';
+    populateSportSelect(arSport);
+    addrouteOverlay.classList.add('visible');
+    setTimeout(() => arUrl.focus(), 0);
+  }
+
+  function findRoute(routeId) {
+    return allRoutes ? allRoutes.features.find(f => f.properties.id === routeId) : undefined;
+  }
+
+  function showEditRouteModal(routeId) {
+    const feature = findRoute(routeId);
+    if (!feature) return;
+    const p = feature.properties;
+    addrouteForm.reset();
+    setRouteModalMode(routeId);
+    arName.value = p.name;
+    populateSportSelect(arSport, p.sport[0]);
+    arStatus.value = p.status;
+    arTags.value = p.tags.join(', ');
+    arNotes.value = p.notes;
+    addrouteError.textContent = '';
+    addrouteSubmit.disabled = false;
+    addrouteOverlay.classList.add('visible');
+    setTimeout(() => arName.focus(), 0);
+  }
+
+  function hideAddRouteModal() {
+    addrouteOverlay.classList.remove('visible');
+    addrouteForm.reset();
+    addrouteError.textContent = '';
+    addrouteSubmit.disabled = false;
+    setRouteModalMode(null);
+  }
+
+  // The message for a failed edit/add of a route or pin (not a GPX upload).
+  function humanizeSaveError(status, body, what) {
+    if (status === 401) return 'You are signed out. Log in, then try again.';
+    if (status === 403) return 'Blocked: cross-origin request.';
+    if (status === 404) return `This ${what} no longer exists. Reload the page.`;
+    const msg = errorDetail(body, null);
+    if (msg) return msg;
+    return `Could not save the ${what} (HTTP ${status}).`;
+  }
+
+  function humanizeAddError(status, body) {
+    if (status === 401) return 'You are signed out. Log in, then add the route again.';
+    if (status === 403) return 'Blocked: cross-origin request.';
+    if (status === 413) return 'That GPX file is too large.';
+    const detail = body && body.detail;
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) {
+      const msgs = detail.map(d => d && d.msg).filter(Boolean);
+      if (msgs.length) return msgs.join('; ');
+    }
+    if (status === 422) return 'Invalid input — check the GPX, name, and status.';
+    return `Could not add route (HTTP ${status}).`;
+  }
+
+  // Run `apply` (the local splice of a saved add or edit) once the map data
+  // is in. A save can finish before the first load does — the add buttons
+  // work while it runs, and the server may still be building the map — and
+  // splicing then would hit the null globals. The splices are idempotent,
+  // so a load that already has the change is fine; a failed load leaves
+  // nothing to patch (its banner asks for a reload).
+  function whenMapLoaded(apply) {
+    if (allPins && allRoutes) apply();
+    else if (mapDataLoaded) mapDataLoaded.then(() => { if (allPins && allRoutes) apply(); });
+  }
+
+  // Splice a feature into a collection by id: replace in place if an entry
+  // with the same id exists (re-adding the same Strava route), else append.
+  // Mirrors the server's swap so a re-add never duplicates client-side.
+  function upsertFeatureById(fc, feature) {
+    const id = feature.properties.id;
+    const idx = fc.features.findIndex(f => f.properties.id === id);
+    if (idx >= 0) fc.features[idx] = feature; else fc.features.push(feature);
+  }
+
+  function applyAddedRoute(routeFeature, startFeature) {
+    upsertFeatureById(allRoutes, routeFeature);
+    if (startFeature) upsertFeatureById(allPins, startFeature);
+    buildRouteHeatCoords(allRoutes, HEAT_STRIDE);
+    buildRouteHeatValues(allRoutes);
+    populateSportFilter(allPins, allRoutes);
+    applyFilters();
+  }
+
+  // A route's new properties (from PATCH) onto its line and start pin.
+  function applyEditedRoute(props) {
+    const line = findRoute(props.id);
+    if (line) line.properties = props;
+    const startId = `${props.id}-start`;
+    const start = allPins.features.find(
+      f => f.properties.kind === 'route_start' && f.properties.id === startId,
+    );
+    if (start) start.properties = { ...props, id: startId, kind: 'route_start' };
+    populateSportFilter(allPins, allRoutes);
+    applyFilters();
+  }
+
+  function applyDeletedRoute(routeId) {
+    allRoutes.features = allRoutes.features.filter(f => f.properties.id !== routeId);
+    const startId = routeId + '-start';
+    allPins.features = allPins.features.filter(f => f.properties.id !== startId);
+    ratingsById.delete(routeId);
+    buildRouteHeatCoords(allRoutes, HEAT_STRIDE);
+    buildRouteHeatValues(allRoutes);
+    populateSportFilter(allPins, allRoutes);
+    applyFilters();
+  }
+
+  async function handleDeleteRoute(routeId) {
+    const question = routeId.startsWith('garmin-')
+      ? 'Remove this route from your map? It comes from Garmin, so a later sync brings it back while it is among the activities you sync.'
+      : 'Remove this route from your wishlist?';
+    if (!window.confirm(question)) return;
+    try {
+      const resp = await apiFetch(`/routes/${encodeURIComponent(routeId)}`, { method: 'DELETE' });
+      // 404: already gone (e.g. removed in another tab) — drop it here too.
+      if (resp.status === 204 || resp.status === 404) {
+        map.closePopup();
+        applyDeletedRoute(routeId);
+      } else if (resp.status !== 401) {
+        showFatalBanner(`Could not remove the route (HTTP ${resp.status}).`);
       }
-    })
-    .catch(() => {});
+    } catch (err) {
+      console.warn('Delete route request failed', err);
+      showFatalBanner('Could not reach the server.');
+    }
+  }
+
+  async function submitRouteEdit() {
+    const routeId = editingRouteId;
+    const feature = findRoute(routeId);
+    if (!feature) {
+      hideAddRouteModal();
+      return;
+    }
+    const name = arName.value.trim();
+    if (!name) { addrouteError.textContent = 'Give the route a name.'; return; }
+    const patch = changedFields(feature.properties, {
+      name,
+      sport: arSport.value,
+      status: arStatus.value,
+      tags: parseTags(arTags.value),
+      notes: arNotes.value,
+    });
+    if (Object.keys(patch).length === 0) {
+      hideAddRouteModal();
+      return;
+    }
+    addrouteSubmit.disabled = true;
+    addrouteError.textContent = '';
+    let resp;
+    try {
+      resp = await apiSendJson('PATCH', `/routes/${encodeURIComponent(routeId)}`, patch);
+    } catch (err) {
+      console.warn('Edit route PATCH failed', err);
+      addrouteSubmit.disabled = false;
+      addrouteError.textContent = 'Could not reach the server.';
+      return;
+    }
+    const body = await resp.json().catch(() => null);
+    if (resp.ok && body) {
+      hideAddRouteModal();
+      map.closePopup();
+      whenMapLoaded(() => applyEditedRoute(body));
+      return;
+    }
+    addrouteSubmit.disabled = false;
+    addrouteError.textContent = humanizeSaveError(resp.status, body, 'route');
+  }
+
+  // ✎ in a popup: the route form for routes (line or start pin), the pin
+  // form for pins.
+  function handleEditFeature(props) {
+    map.closePopup();
+    if (props.kind === 'pin') {
+      const pin = findPin(props.id);
+      if (pin) showPinModal(pin);
+    } else {
+      showEditRouteModal(stripStartSuffix(props.id));
+    }
+  }
+
+  document.getElementById('addroute-button').addEventListener('click', showAddRouteModal);
+  addrouteCancel.addEventListener('click', hideAddRouteModal);
+  addrouteOverlay.addEventListener('click', (ev) => {
+    if (ev.target === addrouteOverlay) hideAddRouteModal();
+  });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && addrouteOverlay.classList.contains('visible')) hideAddRouteModal();
+  });
+  arGpx.addEventListener('change', () => {
+    const file = arGpx.files && arGpx.files[0];
+    if (file) prefillNameFromGpx(file);
+  });
+
+  addrouteForm.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    if (editingRouteId !== null) {
+      await submitRouteEdit();
+      return;
+    }
+    const file = arGpx.files && arGpx.files[0];
+    if (!file) { addrouteError.textContent = 'Attach the exported .gpx file.'; return; }
+    if (!arName.value.trim()) { addrouteError.textContent = 'Give the route a name.'; return; }
+
+    const fd = new FormData();
+    fd.append('strava_url', arUrl.value.trim());
+    fd.append('name', arName.value.trim());
+    fd.append('sport', arSport.value);
+    fd.append('status', arStatus.value);
+    fd.append('tags', arTags.value);
+    fd.append('gpx_file', file, file.name);
+
+    addrouteSubmit.disabled = true;
+    addrouteError.textContent = '';
+    let resp;
+    try {
+      resp = await apiFetch('/routes', { method: 'POST', body: fd });
+    } catch (err) {
+      console.warn('Add route POST failed', err);
+      addrouteSubmit.disabled = false;
+      addrouteError.textContent = 'Could not reach the server.';
+      return;
+    }
+
+    if (resp.status === 201) {
+      let body = null;
+      try { body = await resp.json(); } catch { /* ignore */ }
+      hideAddRouteModal();
+      if (body && body.route) {
+        whenMapLoaded(() => applyAddedRoute(body.route, body.start));
+        const start = body.start;
+        if (start && start.geometry && Array.isArray(start.geometry.coordinates)) {
+          const [lon, lat] = start.geometry.coordinates;
+          map.flyTo([lat, lon], 13);
+        }
+      } else {
+        refreshMapData();  // fallback if the response was unexpectedly empty
+      }
+      return;
+    }
+
+    addrouteSubmit.disabled = false;
+    let body = null;
+    try { body = await resp.json(); } catch { /* ignore */ }
+    addrouteError.textContent = humanizeAddError(resp.status, body);
+  });
+
+  // ── Pins: add (one armed map click), edit, delete ──
+  // "＋ Add pin" arms the map: the next click on it opens the pin form at
+  // that spot (Esc or Cancel disarms). The form POSTs /api/pins, or — for
+  // ✎ on a pin — PATCHes /api/pins/{id} with the changed fields; either
+  // answers with the pin's feature, spliced into the map without a
+  // refetch. Route-start pins are derived from their route and never
+  // reach this form.
+  const addpinButton = document.getElementById('addpin-button');
+  const placeHint = document.getElementById('place-hint');
+  const pinOverlay = document.getElementById('pin-overlay');
+  const pinForm = document.getElementById('pin-form');
+  const pinTitle = document.getElementById('pin-title');
+  const pinName = document.getElementById('pin-name');
+  const pinSport = document.getElementById('pin-sport');
+  const pinStatus = document.getElementById('pin-status');
+  const pinLat = document.getElementById('pin-lat');
+  const pinLon = document.getElementById('pin-lon');
+  const pinTags = document.getElementById('pin-tags');
+  const pinNotes = document.getElementById('pin-notes');
+  const pinError = document.getElementById('pin-error');
+  const pinSubmit = document.getElementById('pin-submit');
+  let placingPin = false;
+  // The pin the form is editing; null while it adds one.
+  let editingPin = null;
+
+  function setPlacingPin(on) {
+    placingPin = on;
+    placeHint.classList.toggle('visible', on);
+    addpinButton.classList.toggle('active', on);
+    map.getContainer().classList.toggle('placing-pin', on);
+  }
+
+  // ~10 cm: plenty for a pin, and short enough to read in the form.
+  function roundCoord(v) {
+    return Number(v.toFixed(6));
+  }
+
+  function findPin(pinId) {
+    return allPins
+      ? allPins.features.find(f => f.properties.kind === 'pin' && f.properties.id === pinId)
+      : undefined;
+  }
+
+  // Open the form for `pin` (a pin feature: edit it) or a new pin at `latlng`.
+  function showPinModal(pin, latlng) {
+    editingPin = pin || null;
+    const p = pin ? pin.properties : null;
+    pinForm.reset();
+    pinTitle.textContent = p ? 'Edit pin' : 'Add a pin';
+    pinSubmit.textContent = p ? 'Save' : 'Add pin';
+    pinName.value = p ? p.name : '';
+    populateSportSelect(pinSport, p ? p.sport[0] : null);
+    pinStatus.value = p ? p.status : 'idea';
+    const [lon, lat] = p ? pin.geometry.coordinates : [latlng.lng, latlng.lat];
+    pinLat.value = String(roundCoord(lat));
+    pinLon.value = String(roundCoord(lon));
+    pinTags.value = p ? p.tags.join(', ') : '';
+    pinNotes.value = p ? p.notes : '';
+    pinError.textContent = '';
+    pinSubmit.disabled = false;
+    pinOverlay.classList.add('visible');
+    setTimeout(() => pinName.focus(), 0);
+  }
+
+  function hidePinModal() {
+    pinOverlay.classList.remove('visible');
+    pinForm.reset();
+    pinError.textContent = '';
+    pinSubmit.disabled = false;
+    editingPin = null;
+  }
+
+  // A pin feature from POST/PATCH: add it, or replace the old version.
+  function applyPin(feature) {
+    const i = allPins.features.findIndex(
+      f => f.properties.kind === 'pin' && f.properties.id === feature.properties.id,
+    );
+    if (i >= 0) allPins.features[i] = feature; else allPins.features.push(feature);
+    populateSportFilter(allPins, allRoutes);
+    applyFilters();
+  }
+
+  function applyDeletedPin(pinId) {
+    allPins.features = allPins.features.filter(
+      f => !(f.properties.kind === 'pin' && f.properties.id === pinId),
+    );
+    populateSportFilter(allPins, allRoutes);
+    applyFilters();
+  }
+
+  async function handleDeletePin(pinId) {
+    if (!window.confirm('Delete this pin?')) return;
+    try {
+      const resp = await apiFetch(`/pins/${encodeURIComponent(pinId)}`, { method: 'DELETE' });
+      // 404: already gone (e.g. deleted in another tab) — drop it here too.
+      if (resp.status === 204 || resp.status === 404) {
+        map.closePopup();
+        applyDeletedPin(pinId);
+      } else if (resp.status !== 401) {
+        showFatalBanner(`Could not delete the pin (HTTP ${resp.status}).`);
+      }
+    } catch (err) {
+      console.warn('Delete pin request failed', err);
+      showFatalBanner('Could not reach the server.');
+    }
+  }
+
+  addpinButton.addEventListener('click', () => {
+    if (READONLY) return;
+    map.closePopup();
+    setPlacingPin(!placingPin);
+  });
+  document.getElementById('place-hint-cancel').addEventListener('click', () => setPlacingPin(false));
+
+  // A click on a route line or marker reaches the map too (after opening
+  // its popup, which is closed again here): the pin goes where clicked.
+  map.on('click', (e) => {
+    if (!placingPin || READONLY) return;
+    setPlacingPin(false);
+    map.closePopup();
+    showPinModal(null, e.latlng.wrap());
+  });
+
+  document.getElementById('pin-cancel').addEventListener('click', hidePinModal);
+  pinOverlay.addEventListener('click', (ev) => {
+    if (ev.target === pinOverlay) hidePinModal();
+  });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Escape') return;
+    if (pinOverlay.classList.contains('visible')) hidePinModal();
+    else if (placingPin) setPlacingPin(false);
+  });
+
+  pinForm.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const name = pinName.value.trim();
+    if (!name) { pinError.textContent = 'Give the pin a name.'; return; }
+    const lat = pinLat.valueAsNumber;
+    const lon = pinLon.valueAsNumber;
+    if (!(lat >= -90 && lat <= 90) || !(lon >= -180 && lon <= 180)) {
+      pinError.textContent = 'Latitude must be within ±90 and longitude within ±180.';
+      return;
+    }
+    const fields = {
+      name,
+      sport: pinSport.value,
+      status: pinStatus.value,
+      tags: parseTags(pinTags.value),
+      notes: pinNotes.value,
+    };
+    let request;
+    if (editingPin) {
+      const p = editingPin.properties;
+      const patch = changedFields(p, fields);
+      const [oldLon, oldLat] = editingPin.geometry.coordinates;
+      // Compare at the form's precision: opening and saving must not nudge it.
+      if (lat !== roundCoord(oldLat)) patch.lat = lat;
+      if (lon !== roundCoord(oldLon)) patch.lon = lon;
+      if (Object.keys(patch).length === 0) {
+        hidePinModal();
+        return;
+      }
+      request = () => apiSendJson('PATCH', `/pins/${encodeURIComponent(p.id)}`, patch);
+    } else {
+      request = () => apiSendJson('POST', '/pins', { ...fields, sport: [fields.sport], lat, lon });
+    }
+    pinSubmit.disabled = true;
+    pinError.textContent = '';
+    let resp;
+    try {
+      resp = await request();
+    } catch (err) {
+      console.warn('Saving the pin failed', err);
+      pinSubmit.disabled = false;
+      pinError.textContent = 'Could not reach the server.';
+      return;
+    }
+    const body = await resp.json().catch(() => null);
+    if (resp.ok && body) {
+      hidePinModal();
+      whenMapLoaded(() => applyPin(body));
+      return;
+    }
+    pinSubmit.disabled = false;
+    pinError.textContent = humanizeSaveError(resp.status, body, 'pin');
+  });
 
   // ── Routes drawer ──
   const drawerEl = document.getElementById('routes-drawer');
@@ -1411,8 +3455,8 @@
       const right = sort === 'updated'
         ? `<span class="drawer-entry-updated">${formatUpdated(rating.updated_at)}</span>`
         : `<span class="drawer-entry-stars">${drawerStars(rating[sort])}</span>`;
-      return `<div class="drawer-entry" data-route-id="${routeId}">
-        <span class="drawer-entry-name">${name}</span>
+      return `<div class="drawer-entry" data-route-id="${esc(routeId)}">
+        <span class="drawer-entry-name">${esc(name)}</span>
         ${right}
       </div>`;
     }).join('');
@@ -1428,6 +3472,21 @@
     drawerEl.classList.remove('open');
     drawerEl.setAttribute('aria-hidden', 'true');
   }
+
+  // ── Fold the legend & filters panel away (remembered per browser) ──
+  const filterPanelEl = document.querySelector('.filter-panel');
+  const panelToggleEl = document.getElementById('panel-toggle');
+  function setPanelCollapsed(collapsed) {
+    filterPanelEl.classList.toggle('collapsed', collapsed);
+    panelToggleEl.setAttribute('aria-expanded', String(!collapsed));
+    panelToggleEl.title = collapsed ? 'Show legend & filters' : 'Fold the panel away';
+  }
+  try { setPanelCollapsed(localStorage.getItem('wishmap.panelCollapsed') === '1'); } catch (_) {}
+  panelToggleEl.addEventListener('click', () => {
+    const collapsed = !filterPanelEl.classList.contains('collapsed');
+    setPanelCollapsed(collapsed);
+    try { localStorage.setItem('wishmap.panelCollapsed', collapsed ? '1' : '0'); } catch (_) {}
+  });
 
   document.getElementById('drawer-toggle').addEventListener('click', () => {
     if (drawerEl.classList.contains('open')) closeDrawer(); else openDrawer();
@@ -1462,7 +3521,487 @@
   document.addEventListener('ratings-changed', () => {
     if (drawerEl.classList.contains('open')) renderDrawer();
   });
-})();
+
+  // ── Accounts: login / register screen, log out ──
+  // Login and register POST JSON {username, password} to /api/auth/*; the
+  // server answers with an HttpOnly session cookie this page never sees.
+  // These use plain fetch, not apiFetch: their 401 means "wrong password",
+  // not "session gone".
+  const authOverlay = document.getElementById('auth-overlay');
+  const authTitle = document.getElementById('auth-title');
+  const authTabLogin = document.getElementById('auth-tab-login');
+  const authTabRegister = document.getElementById('auth-tab-register');
+  const authMessage = document.getElementById('auth-message');
+  const authForm = document.getElementById('auth-form');
+  const authUsername = document.getElementById('auth-username');
+  const authPassword = document.getElementById('auth-password');
+  const authPasswordHint = document.getElementById('auth-password-hint');
+  const authPassword2Label = document.getElementById('auth-password2-label');
+  const authPassword2 = document.getElementById('auth-password2');
+  const authError = document.getElementById('auth-error');
+  const authSubmit = document.getElementById('auth-submit');
+  const accountName = document.getElementById('account-name');
+  let authMode = 'login';
+  let appStarted = false;
+
+  function setAuthMode(mode) {
+    authMode = mode;
+    const register = mode === 'register';
+    authTabLogin.setAttribute('aria-selected', String(!register));
+    authTabRegister.setAttribute('aria-selected', String(register));
+    authPasswordHint.hidden = !register;
+    authPassword2Label.hidden = !register;
+    authPassword2.required = register;
+    authPassword.autocomplete = register ? 'new-password' : 'current-password';
+    authSubmit.textContent = register ? 'Create account' : 'Log in';
+    authError.textContent = '';
+  }
+
+  function showAuthOverlay(message) {
+    authMessage.textContent = message || '';
+    if (authOverlay.classList.contains('visible')) return;
+    setAuthMode('login');
+    authSubmit.disabled = false;
+    authOverlay.classList.add('visible');
+    setTimeout(() => authUsername.focus(), 0);
+  }
+
+  function hideAuthOverlay() {
+    authOverlay.classList.remove('visible');
+    authForm.reset();
+    authMessage.textContent = '';
+    authError.textContent = '';
+    authSubmit.disabled = false;
+  }
+
+  // apiFetch saw the session vanish mid-use (expired, or logged out in
+  // another tab). Stop background polling and ask for a login; after it
+  // the page reloads, so no state of the previous session survives.
+  function onSessionLost() {
+    if (syncPollTimer !== null) {
+      clearInterval(syncPollTimer);
+      syncPollTimer = null;
+    }
+    hideGarminLoginModal();
+    showAuthOverlay('Your session has ended. Log in again to continue.');
+  }
+
+  function humanizeAuthError(resp, body) {
+    const detail = body && body.detail;
+    if (resp.status === 401) return 'Wrong username or password.';
+    if (resp.status === 429) {
+      const wait = resp.headers.get('Retry-After');
+      return `Too many failed attempts. Try again in ${wait || 'a few'} seconds.`;
+    }
+    if (resp.status === 409) return 'That username is taken.';
+    if (detail === 'registration_closed') return 'This server is not accepting new accounts.';
+    if (detail === 'cross_origin_blocked') return 'Blocked: cross-origin request.';
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) {
+      const msgs = detail.map(d => d && d.msg).filter(Boolean);
+      if (msgs.length) return msgs.join('; ');
+    }
+    return `Something went wrong (HTTP ${resp.status}).`;
+  }
+
+  authTabLogin.addEventListener('click', () => setAuthMode('login'));
+  authTabRegister.addEventListener('click', () => setAuthMode('register'));
+
+  authForm.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const username = authUsername.value.trim();
+    const password = authPassword.value;
+    if (!username || !password) return;
+    if (authMode === 'register' && password !== authPassword2.value) {
+      authError.textContent = "The passwords don't match.";
+      return;
+    }
+    authSubmit.disabled = true;
+    authError.textContent = '';
+    let resp;
+    try {
+      resp = await fetch(`${API_BASE}/auth/${authMode}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+    } catch (err) {
+      console.warn('Auth request failed', err);
+      authSubmit.disabled = false;
+      authError.textContent = 'Could not reach the server.';
+      return;
+    }
+    let body = null;
+    try { body = await resp.json(); } catch { /* ignore */ }
+    if (resp.ok && body) {
+      // Signing back in after a lost session may be a different account:
+      // start from a clean page rather than patching the old one's state.
+      if (appStarted) {
+        window.location.reload();
+        return;
+      }
+      hideAuthOverlay();
+      startApp(body);
+      return;
+    }
+    authSubmit.disabled = false;
+    authError.textContent = humanizeAuthError(resp, body);
+  });
+
+  document.getElementById('logout-button').addEventListener('click', async () => {
+    try {
+      await fetch(`${API_BASE}/auth/logout`, { method: 'POST' });
+    } catch (err) {
+      console.warn('Logout request failed', err);
+    }
+    // Reload: the boot sequence finds no session and shows the login screen,
+    // and none of this account's data stays in the page.
+    window.location.reload();
+  });
+
+  // ── Settings modal ──
+  // Account (change password, log out), Garmin (account, what to sync,
+  // forget the saved login), the Strava export upload, sharing with other
+  // users and the public link.
+  // Each section talks to its endpoint on its own; nothing here is cached
+  // across opens.
+  const settingsOverlay = document.getElementById('settings-overlay');
+  const settingsUsername = document.getElementById('settings-username');
+  const passwordForm = document.getElementById('password-form');
+  const passwordCurrent = document.getElementById('password-current');
+  const passwordNew = document.getElementById('password-new');
+  const passwordNew2 = document.getElementById('password-new2');
+  const passwordSubmit = document.getElementById('password-submit');
+  const passwordStatus = document.getElementById('password-status');
+  const garminStatus = document.getElementById('garmin-status');
+  const garminSettingsForm = document.getElementById('garmin-settings-form');
+  const garminUsername = document.getElementById('garmin-username');
+  const garminLimit = document.getElementById('garmin-limit');
+  const garminFilter = document.getElementById('garmin-filter');
+  const garminSave = document.getElementById('garmin-save');
+  const garminForget = document.getElementById('garmin-forget');
+  const garminSettingsStatus = document.getElementById('garmin-settings-status');
+  const stravaForm = document.getElementById('strava-form');
+  const stravaFile = document.getElementById('strava-file');
+  const stravaSubmit = document.getElementById('strava-submit');
+  const stravaStatus = document.getElementById('strava-status');
+  const linkUrlLabel = document.getElementById('link-url-label');
+  const linkUrl = document.getElementById('link-url');
+  const linkCreate = document.getElementById('link-create');
+  const linkCopy = document.getElementById('link-copy');
+  const linkRotate = document.getElementById('link-rotate');
+  const linkRevoke = document.getElementById('link-revoke');
+  const linkStatus = document.getElementById('link-status');
+  const linkButtons = [linkCreate, linkCopy, linkRotate, linkRevoke];
+  const shareEnabled = document.getElementById('settings-share-enabled');
+  const shareStatus = document.getElementById('settings-share-status');
+  let currentAccount = null;
+
+  function setStatus(el, message, isError) {
+    el.textContent = message || '';
+    el.classList.toggle('error', Boolean(isError));
+  }
+
+  function renderGarminSettings(settings) {
+    garminSettings = settings;
+    garminUsername.value = settings.username || '';
+    garminLimit.value = String(settings.activity_limit);
+    garminFilter.value = settings.sport_filter.join(', ');
+    garminForget.hidden = !settings.logged_in;
+    setStatus(
+      garminStatus,
+      !settings.username
+        ? 'No Garmin account yet. Save one, then sync.'
+        : settings.logged_in
+          ? `Logged in as ${settings.username}: syncs need no password.`
+          : `Not logged in: the next sync asks for the Garmin password of ${settings.username}.`,
+    );
+  }
+
+  async function showSettingsModal() {
+    settingsUsername.textContent = currentAccount ? currentAccount.username : '';
+    passwordForm.reset();
+    garminSettingsForm.reset();
+    stravaForm.reset();
+    for (const el of [passwordStatus, garminSettingsStatus, stravaStatus]) setStatus(el, '');
+    setStatus(garminStatus, 'Loading…');
+    garminForget.hidden = true;
+    linkUrlLabel.hidden = true;
+    for (const b of linkButtons) b.hidden = true;
+    setStatus(linkStatus, '');
+    shareEnabled.disabled = true;
+    setStatus(shareStatus, '');
+    settingsOverlay.classList.add('visible');
+    try {
+      const [settings, me] = await Promise.all([loadGarminSettings(), fetchJson('/me')]);
+      renderGarminSettings(settings);
+      const strava = me.integrations && me.integrations.strava;
+      setStatus(stravaStatus, strava ? 'An export has been imported; upload a newer one any time.' : '');
+      renderPublicLink(me.public_link);
+      shareEnabled.checked = Boolean(me.sharing);
+      shareEnabled.disabled = false;
+    } catch (e) {
+      console.warn('Loading settings failed', e);
+      setStatus(garminStatus, 'Could not load the Garmin settings.', true);
+      setStatus(linkStatus, 'Could not load the public link.', true);
+      setStatus(shareStatus, 'Could not load the sharing setting.', true);
+    }
+  }
+
+  // ── Share with other users ──
+  // PUT /api/sharing {enabled}; the server answers the stored state.
+  shareEnabled.addEventListener('change', async () => {
+    const wanted = shareEnabled.checked;
+    shareEnabled.disabled = true;
+    setStatus(shareStatus, '');
+    try {
+      const resp = await apiSendJson('PUT', '/sharing', { enabled: wanted });
+      const body = await resp.json().catch(() => null);
+      if (resp.ok && body && typeof body.enabled === 'boolean') {
+        shareEnabled.checked = body.enabled;
+        setStatus(shareStatus, body.enabled
+          ? 'Shared: other users can now show your routes.'
+          : 'No longer shared. Your routes are private again.');
+      } else {
+        shareEnabled.checked = !wanted;
+        if (resp.status !== 401) {
+          setStatus(shareStatus, errorDetail(body, `Could not change sharing (HTTP ${resp.status}).`), true);
+        }
+      }
+    } catch (e) {
+      console.warn('Changing sharing failed', e);
+      shareEnabled.checked = !wanted;
+      setStatus(shareStatus, 'Could not reach the server.', true);
+    }
+    shareEnabled.disabled = false;
+  });
+
+  // ── Public link ──
+  // Create / rotate = POST /api/public-link (answers the new URL), revoke
+  // = DELETE. The server builds the URL from the address this page was
+  // loaded from.
+  function renderPublicLink(url) {
+    const has = Boolean(url);
+    linkUrl.value = url || '';
+    linkUrlLabel.hidden = !has;
+    linkCreate.hidden = has;
+    linkCopy.hidden = !has;
+    linkRotate.hidden = !has;
+    linkRevoke.hidden = !has;
+    setStatus(linkStatus, has ? '' : 'Your map is private: no link exists.');
+  }
+
+  async function changePublicLink(method, doneMessage) {
+    for (const b of linkButtons) b.disabled = true;
+    setStatus(linkStatus, '');
+    try {
+      const resp = await apiFetch('/public-link', { method });
+      const body = method === 'DELETE' ? null : await resp.json().catch(() => null);
+      if (resp.ok && (method === 'DELETE' || (body && body.url))) {
+        renderPublicLink(body ? body.url : null);
+        setStatus(linkStatus, doneMessage);
+      } else if (resp.status !== 401) {
+        setStatus(linkStatus, errorDetail(body, `Could not change the link (HTTP ${resp.status}).`), true);
+      }
+    } catch (e) {
+      console.warn('Changing the public link failed', e);
+      setStatus(linkStatus, 'Could not reach the server.', true);
+    }
+    for (const b of linkButtons) b.disabled = false;
+  }
+
+  linkCreate.addEventListener('click', () => {
+    changePublicLink('POST', 'Link created. Anyone who has it can view your map.');
+  });
+  linkRotate.addEventListener('click', () => {
+    if (!window.confirm('Replace the link with a new one? The current link stops working.')) return;
+    changePublicLink('POST', 'New link created; the old one no longer works.');
+  });
+  linkRevoke.addEventListener('click', () => {
+    if (!window.confirm('Revoke the link? It stops working at once.')) return;
+    changePublicLink('DELETE', 'Link revoked. Your map is private again.');
+  });
+  linkCopy.addEventListener('click', async () => {
+    try {
+      // Needs a secure context (HTTPS or localhost).
+      await navigator.clipboard.writeText(linkUrl.value);
+      setStatus(linkStatus, 'Copied to the clipboard.');
+    } catch {
+      linkUrl.focus();
+      linkUrl.select();
+      setStatus(linkStatus, 'Press Ctrl+C (⌘C) to copy the selected link.');
+    }
+  });
+
+  function hideSettingsModal() {
+    settingsOverlay.classList.remove('visible');
+    passwordForm.reset();
+  }
+
+  document.getElementById('settings-button').addEventListener('click', showSettingsModal);
+  document.getElementById('settings-close').addEventListener('click', hideSettingsModal);
+  settingsOverlay.addEventListener('click', (ev) => {
+    if (ev.target === settingsOverlay) hideSettingsModal();
+  });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && settingsOverlay.classList.contains('visible')) hideSettingsModal();
+  });
+
+  passwordForm.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    if (passwordNew.value !== passwordNew2.value) {
+      setStatus(passwordStatus, "The new passwords don't match.", true);
+      return;
+    }
+    passwordSubmit.disabled = true;
+    setStatus(passwordStatus, '');
+    try {
+      const resp = await apiSendJson('POST', '/auth/password', {
+        current_password: passwordCurrent.value,
+        new_password: passwordNew.value,
+      });
+      const body = resp.status === 204 ? null : await resp.json().catch(() => null);
+      if (resp.status === 204) {
+        passwordForm.reset();
+        setStatus(passwordStatus, 'Password changed. Your other devices were signed out.');
+      } else if (resp.status === 403) {
+        setStatus(passwordStatus, 'The current password is wrong.', true);
+      } else if (resp.status === 429) {
+        const wait = resp.headers.get('Retry-After');
+        setStatus(passwordStatus, `Too many failed attempts. Try again in ${wait || 'a few'} seconds.`, true);
+      } else if (resp.status !== 401) {
+        setStatus(passwordStatus, errorDetail(body, `Something went wrong (HTTP ${resp.status}).`), true);
+      }
+    } catch (e) {
+      console.warn('Password change failed', e);
+      setStatus(passwordStatus, 'Could not reach the server.', true);
+    }
+    passwordSubmit.disabled = false;
+  });
+
+  garminSettingsForm.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    garminSave.disabled = true;
+    setStatus(garminSettingsStatus, '');
+    try {
+      const resp = await apiSendJson('PUT', '/integrations/garmin', {
+        username: garminUsername.value.trim(),
+        activity_limit: Number(garminLimit.value),
+        sport_filter: garminFilter.value.split(',').map(t => t.trim()).filter(Boolean),
+      });
+      const body = await resp.json().catch(() => null);
+      if (resp.ok && body) {
+        renderGarminSettings(body);
+        setStatus(garminSettingsStatus, 'Saved. The next sync uses these settings.');
+      } else if (resp.status !== 401) {
+        setStatus(garminSettingsStatus, errorDetail(body, `Could not save (HTTP ${resp.status}).`), true);
+      }
+    } catch (e) {
+      console.warn('Saving Garmin settings failed', e);
+      setStatus(garminSettingsStatus, 'Could not reach the server.', true);
+    }
+    garminSave.disabled = false;
+  });
+
+  garminForget.addEventListener('click', async () => {
+    if (!window.confirm('Forget the saved Garmin login? The next sync asks for the Garmin password again.')) return;
+    garminForget.disabled = true;
+    try {
+      const resp = await apiFetch('/integrations/garmin', { method: 'DELETE' });
+      if (resp.status === 204) {
+        renderGarminSettings(await loadGarminSettings());
+        setStatus(garminSettingsStatus, 'Garmin login forgotten.');
+      } else if (resp.status !== 401) {
+        setStatus(garminSettingsStatus, `Could not forget the login (HTTP ${resp.status}).`, true);
+      }
+    } catch (e) {
+      console.warn('Forgetting the Garmin login failed', e);
+      setStatus(garminSettingsStatus, 'Could not reach the server.', true);
+    }
+    garminForget.disabled = false;
+  });
+
+  stravaForm.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const file = stravaFile.files && stravaFile.files[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('archive', file);
+    stravaSubmit.disabled = true;
+    setStatus(stravaStatus, 'Uploading…');
+    try {
+      const resp = await apiFetch('/integrations/strava/archive', { method: 'POST', body: fd });
+      const body = await resp.json().catch(() => null);
+      if (resp.ok && body) {
+        stravaForm.reset();
+        const matched = body.matched_routes === null
+          ? 'Your next Garmin sync matches its activities against them.'
+          : `${body.matched_routes} Garmin route(s) now carry their Strava names.`;
+        setStatus(stravaStatus, `Imported ${body.imported} Strava activities (${body.total} in total). ${matched}`);
+        if (body.matched_routes !== null) refreshMapData();
+      } else if (resp.status === 409) {
+        setStatus(stravaStatus, 'A sync is running. Upload again once it has finished.', true);
+      } else if (resp.status === 413) {
+        setStatus(stravaStatus, 'That file is too large. Upload just activities.csv from the export.', true);
+      } else if (resp.status !== 401) {
+        setStatus(stravaStatus, errorDetail(body, `Upload failed (HTTP ${resp.status}).`), true);
+      }
+    } catch (e) {
+      console.warn('Strava upload failed', e);
+      setStatus(stravaStatus, 'Could not reach the server.', true);
+    }
+    stravaSubmit.disabled = false;
+  });
+
+  // apiFetch saw 409 vault_locked: this browser's session predates its
+  // vault key (or the key went stale). Logging in again hands it over.
+  function onVaultLocked() {
+    hideGarminLoginModal();
+    hideSettingsModal();
+    showAuthOverlay('Log in again to unlock your saved Garmin login on this browser.');
+  }
+
+  // ── Boot ──
+  // The public config (title, whether registration is open) loads in
+  // parallel with the sign-in check. A read-only copy has no accounts and
+  // loads its data straight away; the live app shows the login screen
+  // until GET /api/me finds a session.
+  function startApp(account) {
+    appStarted = true;
+    currentAccount = account;
+    accountName.textContent = account.username;
+    accountName.title = account.username;
+    loadMapData();
+    showCurrentSyncStatus();
+    loadSharedUsers();
+  }
+
+  fetchJson(dataPath('config'))
+    .then(config => {
+      document.title = config.title;
+      authTitle.textContent = config.title;
+      authTabRegister.hidden = !config.registration_open;
+    })
+    .catch(e => console.warn('Config load failed', e));
+
+  if (READONLY) {
+    loadMapData();
+  } else {
+    fetch(`${API_BASE}/me`)
+      .then(async r => {
+        if (r.status === 401) {
+          showAuthOverlay();
+          return;
+        }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        startApp(await r.json());
+      })
+      .catch(e => {
+        console.error('Sign-in check failed', e);
+        showFatalBanner(`Could not reach the server: ${e.message}`);
+      });
+  }
+});
 </script>
 </body>
 </html>

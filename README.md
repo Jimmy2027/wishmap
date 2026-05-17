@@ -1,9 +1,13 @@
 # wishmap
 
-Self-hosted map with pins, routes, and filtering for outdoor sports.
+Self-hosted map of outdoor routes and pins (hiking, biking, ski touring, …),
+for one person or a handful of friends on one server.
 
-Displays an OpenStreetMap basemap with pins (points of interest) and routes
-(loaded from GPX files). Configured entirely via a TOML file.
+Everyone gets an account with their own map on an OpenStreetMap basemap:
+pins (places to go), routes (GPX tracks — added by hand, synced from Garmin
+Connect, or imported), star ratings, and filters by sport and status. Users
+can share their routes with the other accounts on the server, and a map can
+be shared read-only through a public link, or exported as a static site.
 
 ## Setup
 
@@ -17,219 +21,405 @@ uv sync
 uv run wishmap
 ```
 
-Then open http://127.0.0.1:8000
+Then open http://127.0.0.1:8000, register an account and log in.
+
+`uv run wishmap` (the same as `uv run wishmap serve`) is the development
+server: it binds to `127.0.0.1:8000` and reloads on code changes. For a server
+other people reach, see [Deployment](#deployment).
 
 ### Options
 
 ```bash
-uv run wishmap --config /path/to/config.toml
 uv run wishmap --host 0.0.0.0 --port 3000
+uv run wishmap --config /path/to/wishmap.toml   # or set WISHMAP_CONFIG
+uv run wishmap import-toml --user NAME wishmap.toml   # see "Moving a single-user install …"
+uv run wishmap export --user NAME ./public            # see "Static export"
 ```
 
 ## Configuration
 
-Edit `wishmap.toml` to add pins and routes:
+`wishmap.toml` (in the working directory, or wherever `--config` /
+`WISHMAP_CONFIG` points) holds the server-wide settings only. Everything that
+belongs to a person — pins, routes, ratings, Garmin and Strava settings — lives
+in their account and is edited in the web UI.
 
 ```toml
-title = "wishmap"
-
-[[pins]]
-id = "pin-1"
-name = "Nice hut"
-lat = 46.835
-lon = 9.825
-sport = ["hiking", "ski_touring"]
-status = "idea"
-tags = ["hut", "viewpoint"]
-notes = "Could be a good overnight stop"
-
-[[routes]]
-id = "route-1"
-name = "Weekend gravel loop"
-sport = "biking"
-status = "planned"
-tags = ["gravel", "loop"]
-notes = "Try in late spring"
-color = "#2E86DE"
-gpx = "data/routes/weekend-gravel-loop.gpx"
+title = "wishmap"           # shown in the page title and header
+allow_registration = true   # anyone who reaches the server can create an account
+secure_cookies = false      # true when the server is reached over HTTPS
+session_days = 30           # how long a login lasts (1–365)
+data_dir = "data"           # app state; relative to this file unless absolute
 ```
 
-Routes reference GPX files. Paths are relative to the TOML file location.
+| Key | Default | Description |
+|-----|---------|-------------|
+| `title` | `"wishmap"` | Page title |
+| `allow_registration` | `true` | Offer "Register" on the login screen. Turn off once everyone has an account; existing accounts keep logging in |
+| `secure_cookies` | `false` | Mark the login cookies `Secure` (HTTPS only). Must be `true` in production — see [Deployment](#deployment) |
+| `session_days` | `30` | Lifetime of a login and its cookies, in days |
+| `data_dir` | `"data"` | Where `wishmap.db` and the per-account files live |
 
-### Fields
+Settings are read at startup; restart the server after changing them. The
+file must exist (it may be empty). Keys the server doesn't know are ignored
+with a warning. The keys of a single-user config from before accounts
+(`pins`, `routes`, `includes`, `[garmin]`, `[strava]`) are ignored with one
+startup note — they are the input of `import-toml`, not served (see
+[Moving a single-user install into an account](#moving-a-single-user-install-into-an-account)).
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `id` | yes | Unique identifier |
-| `name` | yes | Display name |
-| `sport` | yes | String or list of strings |
-| `status` | yes | `idea`, `planned`, or `done` |
-| `lat`/`lon` | pins only | Coordinates |
-| `gpx` | routes only | Path to GPX file |
-| `tags` | no | List of strings |
-| `notes` | no | Free text |
-| `color` | routes only | Hex color for the route line |
+The `wishmap.toml` in this repository still carries such a block below its
+settings: it is the author's pre-account install, kept so that
+`import-toml` can move it into an account. A fresh install only needs the
+settings.
+
+## Accounts
+
+The login screen has **Log in** and, while `allow_registration` is on,
+**Register**. Usernames are 3–32 characters (letters, digits, `.`, `_`, `-`,
+case-insensitive); passwords need at least 8 characters.
+
+- **Passwords** are stored as salted scrypt hashes. A login sets two
+  HttpOnly cookies: `wishmap_session` (a random token; the database keeps
+  only its SHA-256) and `wishmap_vault` (the account's vault key, see
+  [Security model](#security-model)).
+- **Brute-force brake**: after 5 wrong passwords for a username, that name
+  is locked out for 60 seconds (HTTP 429), even for the right password.
+  The counter is in memory; a restart resets it.
+- **Settings → Account** changes the password (which signs out the
+  account's other sessions) and logs out.
+- **There is no password reset.** A forgotten password can't be recovered
+  by the user; because the vault key is wrapped under the password, a reset
+  would lose the saved Garmin login anyway (the map data would survive).
+- With registration closed, `import-toml` (below) can still create an
+  account on the command line.
+
+Every write endpoint refuses cross-site requests (`Sec-Fetch-Site`, falling
+back to `Origin`), so another site can't act through a logged-in browser.
+
+## Using the map
+
+- **＋ Add route**: paste a Strava route link (optional) and upload its
+  exported GPX (up to 10 MB), then set name, sport, status and tags.
+- **＋ Add pin**: click the button, then the map where the pin goes.
+- **Edit / delete**: the ✎ Edit and ✕ buttons in a route's or pin's popup.
+  A route's GPX can't be edited — delete the route and add it again.
+  Route-start markers follow their route.
+- **Ratings**: each route can be rated 1–5 on Fun, Difficulty and Scenery
+  in its popup; the ☰ Routes drawer sorts by any axis.
+- **Filters** by sport and status.
+
+| Field | Description |
+|-------|-------------|
+| `name` | Display name |
+| `sport` | One or more sports (`hiking`, `biking`, `ski_touring`, …; free text) |
+| `status` | `idea`, `planned` or `done` |
+| `tags` | Free-form labels |
+| `notes` | Free text (a Garmin sync writes date, distance and duration here) |
+
+Colors are not configurable: each sport gets its own color, and `idea`
+pins and routes render at reduced opacity (a faint "draft" look). The color
+map plus a hashed fallback for unmapped sports lives in
+`src/wishmap/static/index.html`.
 
 ## Garmin sync
 
-Wishmap can pull your Garmin Connect activities, download their GPX tracks, and
-generate route entries automatically.
+The **↻ Sync** button pulls your Garmin Connect activities with GPS data,
+downloads their GPX tracks and puts them on your map as `done` routes.
 
-1. Add a `[garmin]` section to `wishmap.toml`:
+1. **⚙ Settings → Garmin Connect**: enter your Garmin email, how many of
+   the newest activities to sync (default 1000), and optionally which
+   Garmin activity types to keep (e.g. `hiking, cycling`). Save. (Or skip
+   this: the first sync asks for the email too, with the default settings.)
+2. Click **↻ Sync**. The first time, wishmap asks for your **Garmin
+   password**. It is sent with that one sync, used for the login and then
+   dropped — never written to disk or logged.
+3. If your Garmin account uses two-factor login, Garmin sends a one-time
+   code by email or SMS; enter it in the **Garmin MFA code** dialog and the
+   sync restarts.
+4. The Garmin session the login produced is saved **encrypted with your
+   vault key** (see [Security model](#security-model)). Later syncs use it
+   without asking for the password — from any browser you log in on —
+   until Garmin expires it, Garmin rejects it, or you click **Forget Garmin
+   login**. Then the password dialog comes back.
 
-   ```toml
-   [garmin]
-   username = "you@example.com"
-   password_pass = "Garmin"     # or password / password_file
+Sync runs in the background; the map refreshes when it finishes. Hover the
+Sync button after a failed sync to see the error. If Garmin rate-limits you
+(`429`), wait 15–60 minutes before retrying.
 
-   # Optional:
-   # activity_limit = 1000        # how many recent activities to fetch
-   # gpx_dir = "data/garmin"      # where GPX files are stored (relative to TOML)
-   # tokenstore = "~/.garminconnect"
-   # sport_filter = ["hiking", "cycling", "trail_running"]  # only these Garmin typeKeys
-   ```
+What a sync writes: one route `garmin-<activityId>` per activity, its GPX at
+`gpx/garmin/<activityId>.gpx` in your account's directory. Each sync
+**replaces your Garmin routes as a set**: an activity that falls outside the
+activity limit (or the type filter) drops off the map, and edits made to a
+Garmin route in the web UI are overwritten by the next sync. Ratings are
+keyed on the stable route id, so they survive re-syncs. Routes you added
+yourself or imported are never touched.
 
-   Provide the password through exactly one of:
-   - `password` — plaintext (not recommended)
-   - `password_file` — path to a file containing the password
-   - `password_pass` — entry name in [passwordstore](https://www.passwordstore.org/)
-     (`pass show <name>`)
+Garmin activity types are mapped to wishmap sports (e.g. `cycling` →
+`biking`, `backcountry_skiing_snowboarding` → `ski_touring`); unknown types
+pass through as-is and get a stable hashed color.
 
-2. Include the auto-generated routes file from your main config:
+A browser that logged in before the vault existed, or whose `wishmap_vault`
+cookie is gone, can still use the map but not the saved Garmin login: Sync
+asks you to log in to wishmap again (which restores the vault key).
 
-   ```toml
-   includes = ["data/garmin/garmin.toml"]
-   ```
+## Strava names (archive upload)
 
-3. Run the sync:
+Garmin activity names are often auto-generated. If you keep better names
+and sport types on Strava, wishmap uses them for Garmin routes whose
+activity matches a Strava one (start within ±5 min, distance within ±5%), and
+links the route to the Strava activity.
 
-   ```bash
-   uv run wishmap --sync
-   ```
+Strava's API is subscriber-only, so wishmap reads Strava's data export:
 
-   On first run, Garmin Connect is contacted with your credentials and a token
-   is cached to `tokenstore` (`~/.garminconnect` by default). Subsequent syncs
-   reuse the token until it expires. GPX files are written to `gpx_dir` and a
-   `garmin.toml` file with one `[[routes]]` entry per activity is regenerated.
+1. On strava.com: Settings → My Account → "Download or Delete Your Account"
+   → "Request your archive". Strava emails a `.zip`.
+2. **⚙ Settings → Strava**: upload the `.zip` (or just its
+   `activities.csv`).
 
-Only activities with GPS data are included. Garmin activity types are mapped to
-wishmap sports (e.g. `cycling` → `biking`, `backcountry_skiing_snowboarding` →
-`ski_touring`); unknown types pass through as-is with a default gray color.
+The upload fills your account's Strava activity database and immediately
+re-matches your existing Garmin routes, so new names show up without another
+Garmin sync. Upload a fresh archive whenever you want newer activities
+matched; it merges with what's already there. No Strava login or token is
+involved.
 
-If Garmin rate-limits you (`429`), wait 15–60 minutes before retrying.
+## Public links
 
-## Strava enrichment
+**⚙ Settings → Public link → Create link** publishes your map at
+`https://<your server>/u/<token>`: the same map, read-only, for anyone with
+the link and without an account. It is a live view — later changes show up
+there too.
 
-Garmin activity names are often auto-generated. If you maintain better names
-and sport types on Strava, wishmap can pull them in and override the Garmin
-metadata when activities match (within ±5 min and ±5% distance).
+- **Rotate** replaces the token: the old URL stops working at once.
+- **Revoke** takes the link down. An unknown or revoked token is a plain
+  404 that doesn't say whether the link ever existed.
+- The page is sent with `Referrer-Policy: strict-origin` (tile servers and
+  sites you link to see only your server's origin, never the token) and
+  `X-Robots-Tag: noindex`.
+- Everything on your map is visible there: every pin and route, its notes
+  and tags, and your ratings. There are no per-item privacy settings.
+- The link is built from the URL the server sees; behind a reverse proxy,
+  it is only `https://` and on the right host if the proxy is set up as in
+  [Deployment](#deployment).
 
-1. Register an API app at https://www.strava.com/settings/api. Set
-   "Authorization Callback Domain" to `localhost`.
-2. Add a `[strava]` section to `wishmap.toml`:
+## Sharing routes with other users
 
-   ```toml
-   [strava]
-   client_id = "12345"
-   client_secret_pass = "Strava"   # or client_secret / client_secret_file
-   ```
+**⚙ Settings → Share with other users → Make my routes available to other
+users on this server** opts your routes in. Every other account on the
+server can then overlay them on its own map; there is no per-user list of
+who may see them.
 
-3. One-time auth: `uv run wishmap --strava-auth` — opens an authorization URL
-   you visit in a browser; paste the `code` query param from the redirect URL
-   back into the terminal. Tokens are saved to `~/.wishmap/strava_tokens.json`.
-4. Populate the local DB: `uv run wishmap --sync-strava`. Re-run periodically.
-5. `uv run wishmap --sync` (Garmin sync) automatically consults the Strava DB
-   and overrides `name` and `sport` on matched routes; the `strava` tag is
-   appended so you can filter on it.
+- Others see each route's track, name, sport, status and tags. Notes,
+  Strava ids, ratings and pins are never shared.
+- Every route is shared, including synced Garmin activities. Those usually
+  start at your home, and the tracks are not trimmed.
+- Opting out takes effect at once: your routes can no longer be fetched,
+  and you are no longer offered after the others reload the page.
+- In the **Other users** group of the legend & filters panel, tick whose
+  routes to show. Each user gets their own color; their routes follow the
+  sport and status filters but never feed the heatmap, and are not editable
+  or rateable. The selection is remembered in the browser.
+- Public links and static exports never include other users' routes.
 
-## Web-UI sync and headless gpg-agent
-
-The web UI's "↻ Sync" button POSTs to `/api/sync`, which calls the same Strava
-and Garmin sync paths as `wishmap --sync`. When wishmap runs as a long-lived
-service (systemd, Docker, headless box) and you use `password_pass` /
-`client_secret_pass`, `gpg-agent` has no TTY to prompt for the GPG passphrase
-the first time it's needed. To handle this, wishmap exposes a `POST /api/unlock`
-endpoint and the frontend prompts you for the passphrase inline.
-
-For this to work, gpg-agent must accept the loopback pinentry that wishmap
-uses to deliver the passphrase. Add the following to `~/.gnupg/gpg-agent.conf`:
-
-```
-allow-loopback-pinentry
-
-# How long gpg-agent caches the unlocked key after one unlock.
-# 28800 = 8 hours. Tune to taste.
-default-cache-ttl 28800
-max-cache-ttl 28800
-```
-
-Then reload the agent:
+## Static export
 
 ```bash
-gpgconf --reload gpg-agent
+uv run wishmap export --user NAME ./public
 ```
 
-### Running under systemd
+writes a read-only snapshot of one account's map as a static site:
+`index.html` plus `api/{config,pins,routes,ratings}.json`. It needs no
+server, has no write surface and contains no credentials, so it can go to
+any static host (it works under a sub-path). Unlike a public link it is a
+snapshot: re-run the export to update it. Route geometry is simplified a
+little to keep the files small, and the Google Fonts import is dropped (the
+page falls back to system fonts) so the host doesn't leak viewers' IPs to
+Google.
 
-systemd units don't inherit your interactive shell's `GNUPGHOME`, so be
-explicit:
+## Moving a single-user install into an account
+
+Before accounts, wishmap was configured by one `wishmap.toml` with
+`[[pins]]`, `[[routes]]`, `includes` (the `data/garmin/garmin.toml` a Garmin
+sync generated), `[garmin]` and `[strava]` sections, and kept web-added
+routes and ratings in `data/wishmap.db`. The server doesn't serve any of that
+anymore. To move it into an account:
+
+1. Start the new version once (or not — the import does the same): it
+   migrates `data/wishmap.db` in place, parking the old web routes and
+   ratings as *unclaimed*.
+2. Stop the server, then run
+
+   ```bash
+   uv run wishmap import-toml --user hendrik wishmap.toml
+   ```
+
+   This creates the account if it doesn't exist (asking for its password;
+   or set `WISHMAP_PASSWORD`, or pass `--password-stdin`) and imports:
+
+   - the TOML's pins, and its routes with their includes; each GPX file is
+     **copied** into the account's directory (`gpx/garmin/` for Garmin-synced
+     `garmin-*` routes, `gpx/import/<original path>` for the rest);
+   - the unclaimed web routes and ratings from the old database — only when
+     importing the server's own config (the one `--config` /
+     `WISHMAP_CONFIG` names), since those belong to that install; `--claim` /
+     `--no-claim` override this;
+   - the Strava activities database (`data/strava/activities.db`);
+   - the `[garmin]` username, `activity_limit` and `sport_filter` — never a
+     password, password file or token. The first sync asks for the Garmin
+     password once.
+
+   Re-running is safe: routes and pins are replaced by id (the TOML wins
+   over edits made since), up-to-date GPX files are not copied again, and
+   Strava activities merge. The source files are only read.
+
+3. Start the server. Once you're happy, delete the legacy keys from
+   `wishmap.toml`; the old `data/garmin/`, `data/routes/` and `data/strava/`
+   aren't read by the server anymore either.
+
+Running the import against a live server works, but an account whose map the
+server has already loaded keeps showing the old data until a restart.
+
+## Security model
+
+What the server stores, per account, in `data/wishmap.db`:
+
+- the password as a salted **scrypt** hash, and session tokens only as
+  SHA-256 hashes — a copy of the database can't be replayed as a login;
+- a random 32-byte **vault key**, only *wrapped*: AES-GCM-encrypted under a
+  key derived from the password with scrypt. Login unwraps it and hands it to
+  the browser in the `wishmap_vault` cookie (HttpOnly, SameSite=Strict); the
+  server holds it in the clear only while handling a request that carries
+  it. A password change re-wraps it;
+- the **Garmin session tokens**, AES-GCM-sealed with the vault key and bound
+  to the account and provider. The Garmin *password* is never stored.
+
+What that protects against, and what not:
+
+- **A stolen database** (or backup) alone yields the Garmin sessions only by
+  brute-forcing a user's wishmap password through scrypt, one account at a
+  time. A weak password makes that feasible; a strong one doesn't.
+- **A compromised running server** — or its operator — sees what passes
+  through it: wishmap passwords at login, Garmin passwords during a sync, and
+  the vault key of every request that carries the cookie. The vault is not a
+  defence against the host.
+- **A stolen browser cookie jar** holds both the session and the vault key
+  (until the session expires or the password changes).
+- **Plain HTTP** exposes cookies and passwords to the network. Serve over
+  HTTPS with `secure_cookies = true`.
+- **Map data is not encrypted**: pins, routes, notes, ratings, GPX files and
+  the Strava activity list are plain files and rows the operator can read.
+- **Sharing with other users** is opt-in and all or nothing: it shows your
+  routes (track, name, sport, status, tags) to every account on the server.
+  Notes, ratings and pins stay private.
+- **Forgetting the password** loses the vault key, so the saved Garmin login
+  is gone (log in to Garmin again); the account's map data is unaffected.
+
+## Deployment
+
+wishmap holds per-user state (built maps, sync status, a Garmin login waiting
+for its MFA code, the login throttle) in memory, so it must run as **a single
+process** — one uvicorn worker. Put it behind a reverse proxy that
+terminates TLS, and run uvicorn directly (not `wishmap serve`, which
+auto-reloads):
+
+```bash
+WISHMAP_CONFIG=/srv/wishmap/wishmap.toml \
+  uv run uvicorn wishmap.app:app --host 127.0.0.1 --port 8000 \
+    --proxy-headers --forwarded-allow-ips 127.0.0.1
+```
+
+and in `wishmap.toml`:
+
+```toml
+secure_cookies = true
+allow_registration = false   # once everyone has an account
+data_dir = "/srv/wishmap/data"
+```
+
+- `--proxy-headers` makes uvicorn trust `X-Forwarded-Proto` / `-For` from
+  the addresses in `--forwarded-allow-ips` (the proxy's; `127.0.0.1` when it
+  runs on the same host). Without them the app thinks it is on plain
+  `http://`, and public links come out as `http://` URLs.
+- The proxy must pass the original **`Host`** header: public links use it,
+  and the cross-site check compares a request's `Origin` against it. Caddy
+  does this by default; nginx needs `proxy_set_header Host $host;`.
+- `secure_cookies = true` keeps the session and vault cookies off plain HTTP.
+  Leave it off for a plain-HTTP development server — browsers would not send
+  the cookies back and you could never stay logged in.
+- Raise the proxy's request-size limit if you want to upload Strava exports
+  (often 100 MB+; wishmap accepts up to 1 GiB) or large GPX files (10 MB).
+
+Example Caddyfile:
+
+```
+map.example.com {
+	reverse_proxy 127.0.0.1:8000
+}
+```
+
+Example nginx server block:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name map.example.com;
+    # ssl_certificate …; ssl_certificate_key …;
+    client_max_body_size 1g;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 300s;   # an account's first map load parses all its GPX
+    }
+}
+```
+
+Example systemd unit:
 
 ```ini
 [Service]
-Environment=GNUPGHOME=/home/YOU/.gnupg
-ExecStartPre=/usr/bin/gpg-agent --daemon --quiet
-ExecStart=/path/to/uv run wishmap --host 0.0.0.0 --port 8000
-User=YOU
+User=wishmap
+WorkingDirectory=/srv/wishmap/app
+Environment=WISHMAP_CONFIG=/srv/wishmap/wishmap.toml
+ExecStart=/usr/bin/uv run uvicorn wishmap.app:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips 127.0.0.1
+Restart=on-failure
 ```
 
-When you first click "↻ Sync" in the browser, you'll get a passphrase modal.
-Type your GPG passphrase once; it unlocks every configured pass entry in one
-shot and gpg-agent caches the keys for `default-cache-ttl`. Subsequent syncs
-inside that window run without a prompt.
+An account's map is built on its first request after a (re)start, which
+parses all of its GPX files — up to a minute for a thousand-route account.
+Later requests are served from memory.
 
-If your `garmin.password_pass` and `strava.client_secret_pass` are encrypted
-to different keys, the modal will pop a second time after the first unlock
-succeeds — that's how you know they're not a shared key.
+## Data layout
 
-### Optional: `warm_pass_entry`
+Everything lives under `data_dir`:
 
-If you'd rather have `/api/unlock` verify against a specific (e.g. fast)
-entry instead of warming both, set:
-
-```toml
-warm_pass_entry = "wishmap/smoke-test"
+```
+data/
+  wishmap.db                 accounts, sessions, pins, routes, ratings,
+                             integrations, public links, sharing
+                             (SQLite, WAL)
+  users/<account id>/
+    gpx/web/…                routes added in the web UI
+    gpx/garmin/…             Garmin sync (+ activities.json, the last sync's
+                             activity list, for Strava re-matching)
+    gpx/import/…             routes from import-toml
+    strava/activities.db     the uploaded Strava activities
 ```
 
-at the top of `wishmap.toml`. That entry is warmed first; the configured
-service entries follow.
-
-## Ratings
-
-Each route can be rated 1-5 on three axes: Fun, Difficulty, and Scenery. Click
-the stars in a route popup to rate, and use the "☰ Routes" drawer to browse the
-list sorted by any axis. All three axes are independent and optional.
-
-Ratings live in a SQLite file at `data/wishmap.db` (relative to your TOML).
-The file is created on first rating write — no setup command required. Schema
-is one table:
-
-```sql
-CREATE TABLE route_ratings (
-    route_id   TEXT PRIMARY KEY,
-    fun        INTEGER,
-    difficulty INTEGER,
-    scenery    INTEGER,
-    updated_at TEXT NOT NULL
-);
-```
-
-Inspect or back it up with the `sqlite3` CLI:
+The database schema is created — and an older database migrated — whenever
+it's opened; there is no setup step. To back up, copy `data/users/` and take
+a consistent copy of the database:
 
 ```bash
-sqlite3 data/wishmap.db "SELECT * FROM route_ratings ORDER BY fun DESC"
+sqlite3 data/wishmap.db ".backup /backups/wishmap.db"
 ```
 
-The DB is your data — wishmap will never overwrite it. Commit it to git, rsync
-it between machines, or copy it before re-syncing Garmin if you want a safety
-net. Route ids are stable across Garmin re-syncs (`garmin-{activity_id}`), so
-ratings survive `uv run wishmap --sync`.
+Inspect it with the `sqlite3` CLI, e.g. an account's best routes:
+
+```bash
+sqlite3 data/wishmap.db \
+  "SELECT r.name, x.fun FROM route_ratings x
+   JOIN routes r ON r.user_id = x.user_id AND r.id = x.route_id
+   JOIN users u ON u.id = x.user_id
+   WHERE u.username = 'hendrik' ORDER BY x.fun DESC LIMIT 10"
+```

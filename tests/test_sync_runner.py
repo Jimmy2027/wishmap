@@ -1,10 +1,12 @@
 """Unit tests for the sync_runner state machine and error capture.
 
-These tests monkeypatch the actual sync functions (`strava.sync`,
-`garmin.sync`) and `app.reload_data` so nothing touches the network or
-the lifespan globals. The goal here is to verify the runner's bookkeeping:
-state transitions, per-service error capture, skip behavior, and lock
-semantics.
+These tests monkeypatch `garmin.sync` so nothing touches the network.
+Every test runs against its own fresh `UserState` — there is no module
+state to reset. The goal here is to verify the runner's bookkeeping: state
+transitions, error capture, the login/MFA signals, invalidation of the
+user's map data, and per-user isolation. The real `garmin.sync` (with a
+fake Garmin client) is covered by test_garmin_mfa.py and
+test_integrations.py.
 
 Async tests use `asyncio.run` directly rather than pytest-asyncio so this
 test module needs no extra dependency.
@@ -18,339 +20,294 @@ from typing import Any
 import pytest
 
 from wishmap import sync_runner
-from wishmap.exceptions import PassphraseRequiredError, SyncError
-from wishmap.models import GarminConfig, StravaConfig, WishmapConfig
+from wishmap.exceptions import GarminLoginRequiredError, MfaRequiredError, SyncError
+from wishmap.garmin import GarminSyncContext
+from wishmap.models import FeatureCollection
+from wishmap.state import StateRegistry, UserData, UserState
 
 
 def _run(coro: Coroutine[Any, Any, Any]) -> Any:
     return asyncio.run(coro)
 
 
-@pytest.fixture(autouse=True)
-def reset_state(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reset module state before every test and stub out reload_data.
-
-    reload_data lives on the app module and depends on lifespan-initialized
-    globals (_config_path, _base_path). The sync_runner tests don't care
-    about reload — that's covered by the endpoint integration tests.
-    """
-    sync_runner.reset_status_for_tests()
-
-    import wishmap.app
-
-    monkeypatch.setattr(wishmap.app, "reload_data", lambda: None)
+@pytest.fixture
+def state() -> UserState:
+    return UserState(user_id=1)
 
 
-def _strava_cfg() -> StravaConfig:
-    return StravaConfig(client_id="test", client_secret="secret")
+def _warm(state: UserState) -> UserData:
+    """Give the state built map data, so invalidation is observable."""
+    data = UserData(
+        pins_fc=FeatureCollection(features=[]),
+        routes_fc=FeatureCollection(features=[]),
+    )
+    state.data = data
+    return data
 
 
-def _garmin_cfg() -> GarminConfig:
-    return GarminConfig(username="test", password="pw")
-
-
-def test_initial_status_is_idle() -> None:
-    status = sync_runner.get_status()
-    assert status["state"] == "idle"
-    assert status["started_at"] is None
-    assert status["finished_at"] is None
-    assert status["error"] is None
-    assert status["services"]["strava"]["state"] == "idle"
-    assert status["services"]["garmin"]["state"] == "idle"
-
-
-def test_is_running_reflects_state() -> None:
-    assert sync_runner.is_running() is False
-    sync_runner.begin()
-    assert sync_runner.is_running() is True
-
-
-def test_begin_returns_false_when_already_running() -> None:
-    assert sync_runner.begin() is True
-    assert sync_runner.begin() is False
-
-
-def test_begin_resets_started_at_and_clears_per_service() -> None:
-    sync_runner.begin()
-    s = sync_runner.get_status()
-    assert s["started_at"] is not None
-    assert s["error"] is None
-    assert all(svc["state"] == "idle" for svc in s["services"].values())
-
-
-def test_run_sync_with_no_services_marks_skipped_and_done(tmp_path: Path) -> None:
-    cfg = WishmapConfig()  # both garmin and strava are None
-    sync_runner.begin()
-    _run(sync_runner.run_sync(cfg, tmp_path))
-    status = sync_runner.get_status()
-    assert status["state"] == "done"
-    assert status["services"]["strava"]["state"] == "skipped"
-    assert status["services"]["garmin"]["state"] == "skipped"
-    assert status["finished_at"] is not None
-
-
-def test_run_sync_both_succeed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    calls: list[str] = []
-
-    def fake_strava_sync(cfg: Any, base_path: Path) -> None:
-        calls.append("strava")
-
-    def fake_garmin_sync(
-        cfg: Any, base_path: Path, strava_db: Path | None = None
-    ) -> None:
-        calls.append("garmin")
-
-    monkeypatch.setattr("wishmap.strava.sync", fake_strava_sync)
-    monkeypatch.setattr("wishmap.garmin.sync", fake_garmin_sync)
-
-    cfg = WishmapConfig(strava=_strava_cfg(), garmin=_garmin_cfg())
-    sync_runner.begin()
-    _run(sync_runner.run_sync(cfg, tmp_path))
-
-    # Order matters: Strava first so its DB exists when Garmin matches.
-    assert calls == ["strava", "garmin"]
-    status = sync_runner.get_status()
-    assert status["state"] == "done"
-    assert status["services"]["strava"]["state"] == "done"
-    assert status["services"]["garmin"]["state"] == "done"
-    assert status["error"] is None
-
-
-def test_strava_error_does_not_block_garmin(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def fake_strava_sync(cfg: Any, base_path: Path) -> None:
-        raise SyncError("token expired")
-
-    garmin_ran = False
-
-    def fake_garmin_sync(cfg: Any, base_path: Path, strava_db: Any = None) -> None:
-        nonlocal garmin_ran
-        garmin_ran = True
-
-    monkeypatch.setattr("wishmap.strava.sync", fake_strava_sync)
-    monkeypatch.setattr("wishmap.garmin.sync", fake_garmin_sync)
-
-    cfg = WishmapConfig(strava=_strava_cfg(), garmin=_garmin_cfg())
-    sync_runner.begin()
-    _run(sync_runner.run_sync(cfg, tmp_path))
-
-    assert garmin_ran is True
-    status = sync_runner.get_status()
-    assert status["state"] == "error"
-    assert status["services"]["strava"]["state"] == "error"
-    assert status["services"]["strava"]["error"] == "token expired"
-    assert status["services"]["garmin"]["state"] == "done"
-
-
-def test_garmin_error_recorded(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr("wishmap.strava.sync", lambda c, b: None)
-
-    def fake_garmin_sync(cfg: Any, base_path: Path, strava_db: Any = None) -> None:
-        raise SyncError("Garmin rate-limited: wait 15-60 minutes")
-
-    monkeypatch.setattr("wishmap.garmin.sync", fake_garmin_sync)
-
-    cfg = WishmapConfig(strava=_strava_cfg(), garmin=_garmin_cfg())
-    sync_runner.begin()
-    _run(sync_runner.run_sync(cfg, tmp_path))
-
-    status = sync_runner.get_status()
-    assert status["state"] == "error"
-    assert status["services"]["strava"]["state"] == "done"
-    assert status["services"]["garmin"]["state"] == "error"
-    assert "rate-limited" in status["services"]["garmin"]["error"]
-
-
-def test_both_services_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def boom(*args: Any, **kwargs: Any) -> None:
-        raise SyncError("nope")
-
-    monkeypatch.setattr("wishmap.strava.sync", boom)
-    monkeypatch.setattr("wishmap.garmin.sync", boom)
-
-    cfg = WishmapConfig(strava=_strava_cfg(), garmin=_garmin_cfg())
-    sync_runner.begin()
-    _run(sync_runner.run_sync(cfg, tmp_path))
-
-    status = sync_runner.get_status()
-    assert status["state"] == "error"
-    assert status["services"]["strava"]["state"] == "error"
-    assert status["services"]["garmin"]["state"] == "error"
-
-
-def test_unexpected_exception_captured(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Non-SyncError exceptions should be caught and surfaced with a prefix."""
-
-    def crash(cfg: Any, base_path: Path) -> None:
-        raise ValueError("boom")
-
-    monkeypatch.setattr("wishmap.strava.sync", crash)
-
-    cfg = WishmapConfig(strava=_strava_cfg())
-    sync_runner.begin()
-    _run(sync_runner.run_sync(cfg, tmp_path))
-
-    status = sync_runner.get_status()
-    assert status["services"]["strava"]["state"] == "error"
-    assert "unexpected error" in status["services"]["strava"]["error"]
-    assert "boom" in status["services"]["strava"]["error"]
-
-
-def test_reload_data_failure_surfaces_top_level_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr("wishmap.strava.sync", lambda c, b: None)
-    monkeypatch.setattr("wishmap.garmin.sync", lambda c, b, sd: None)
-
-    import wishmap.app
-
-    def broken_reload() -> None:
-        raise SyncError("config reload failed: missing GPX")
-
-    monkeypatch.setattr(wishmap.app, "reload_data", broken_reload)
-
-    cfg = WishmapConfig(strava=_strava_cfg(), garmin=_garmin_cfg())
-    sync_runner.begin()
-    _run(sync_runner.run_sync(cfg, tmp_path))
-
-    status = sync_runner.get_status()
-    assert status["state"] == "error"
-    assert status["services"]["strava"]["state"] == "done"
-    assert status["services"]["garmin"]["state"] == "done"
-    assert "missing GPX" in status["error"]
-
-
-def test_terminal_state_clears_running(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr("wishmap.strava.sync", lambda c, b: None)
-
-    cfg = WishmapConfig(strava=_strava_cfg())
-    sync_runner.begin()
-    assert sync_runner.is_running() is True
-    _run(sync_runner.run_sync(cfg, tmp_path))
-    assert sync_runner.is_running() is False
-    assert sync_runner.get_status()["finished_at"] is not None
-
-
-# ── needs_passphrase flag plumbing ────────────────────────────────────
-
-
-def _raise_passphrase(_cfg: Any, _base: Path, *args: Any) -> None:
-    raise PassphraseRequiredError(
-        "gpg-agent has no cached key for pass entry 'wishmap/x'"
+def _ctx(tmp_path: Path, state: UserState, password: str | None = None) -> GarminSyncContext:
+    return GarminSyncContext(
+        user_id=state.user_id,
+        db_path=tmp_path / "wishmap.db",
+        user_dir=tmp_path / "users" / str(state.user_id),
+        username="u@example.com",
+        password=password,
+        pending=state.pending_mfa,
     )
 
 
-def test_initial_status_has_needs_passphrase_false() -> None:
-    assert sync_runner.get_status()["needs_passphrase"] is False
+def _garmin(monkeypatch: pytest.MonkeyPatch, fn: Any) -> None:
+    monkeypatch.setattr("wishmap.garmin.sync", fn)
 
 
-def test_strava_passphrase_required_sets_flag_and_continues_to_garmin(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """When Strava raises PassphraseRequiredError, Garmin must still
-    attempt — if it has its own credentials it might succeed."""
-    monkeypatch.setattr("wishmap.strava.sync", _raise_passphrase)
-    garmin_called = {"count": 0}
+def test_initial_status_is_idle(state: UserState) -> None:
+    status = sync_runner.get_status(state)
+    assert status == {
+        "state": "idle",
+        "started_at": None,
+        "finished_at": None,
+        "services": {"garmin": {"state": "idle", "error": None}},
+        "error": None,
+        "needs_mfa": False,
+        "needs_garmin_login": False,
+    }
 
-    def garmin_sync(_c: Any, _b: Path, _d: Any = None) -> None:
-        garmin_called["count"] += 1
 
-    monkeypatch.setattr("wishmap.garmin.sync", garmin_sync)
+def test_get_status_is_a_snapshot(state: UserState) -> None:
+    snap = sync_runner.get_status(state)
+    snap["services"]["garmin"]["state"] = "mutated"
+    assert sync_runner.get_status(state)["services"]["garmin"]["state"] == "idle"
 
-    cfg = WishmapConfig(strava=_strava_cfg(), garmin=_garmin_cfg())
-    sync_runner.begin()
-    _run(sync_runner.run_sync(cfg, tmp_path))
 
-    status = sync_runner.get_status()
-    assert status["needs_passphrase"] is True
-    assert status["services"]["strava"]["state"] == "needs_passphrase"
-    assert "wishmap/x" in (status["services"]["strava"]["error"] or "")
-    # Garmin still ran (and presumably succeeded in this fixture).
-    assert garmin_called["count"] == 1
-    assert status["services"]["garmin"]["state"] == "done"
-    # Top-level state is "error" because not every service reached "done"
-    # — the flag is the separate signal.
+def test_is_running_reflects_state(state: UserState) -> None:
+    assert sync_runner.is_running(state) is False
+    sync_runner.begin(state)
+    assert sync_runner.is_running(state) is True
+
+
+def test_begin_returns_false_when_already_running(state: UserState) -> None:
+    assert sync_runner.begin(state) is True
+    assert sync_runner.begin(state) is False
+
+
+def test_begin_resets_started_at_and_clears_flags(state: UserState) -> None:
+    state.sync_status["needs_mfa"] = True
+    state.sync_status["needs_garmin_login"] = True
+    sync_runner.begin(state)
+    s = sync_runner.get_status(state)
+    assert s["started_at"] is not None
+    assert s["error"] is None
+    assert s["needs_mfa"] is False and s["needs_garmin_login"] is False
+    assert s["services"]["garmin"]["state"] == "idle"
+
+
+def test_no_garmin_account_asks_for_a_login(state: UserState) -> None:
+    data = _warm(state)
+    sync_runner.begin(state)
+    _run(sync_runner.run_sync(state, None))
+    status = sync_runner.get_status(state)
     assert status["state"] == "error"
+    assert status["needs_garmin_login"] is True
+    assert status["services"]["garmin"] == {
+        "state": "needs_garmin_login",
+        "error": sync_runner.NO_GARMIN_ACCOUNT,
+    }
+    assert status["finished_at"] is not None
+    # Nothing synced, so the warm map data is kept.
+    assert state.data is data
 
 
-def test_garmin_passphrase_required_sets_flag(
+def test_successful_sync_invalidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: UserState
+) -> None:
+    seen: list[GarminSyncContext] = []
+    _garmin(monkeypatch, seen.append)
+    _warm(state)
+    ctx = _ctx(tmp_path, state)
+    sync_runner.begin(state)
+    _run(sync_runner.run_sync(state, ctx))
+
+    # Garmin runs on this user's context (and parks MFA on their slot).
+    assert seen == [ctx]
+    assert seen[0].pending is state.pending_mfa
+    status = sync_runner.get_status(state)
+    assert status["state"] == "done"
+    assert status["services"]["garmin"] == {"state": "done", "error": None}
+    assert status["error"] is None
+    # New data in the DB: the user's map is dropped so the next GET rebuilds.
+    assert state.data is None
+
+
+def test_garmin_error_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: UserState
+) -> None:
+    def fake_sync(ctx: GarminSyncContext) -> None:
+        raise SyncError("Garmin rate-limited: wait 15-60 minutes")
+
+    _garmin(monkeypatch, fake_sync)
+    data = _warm(state)
+    sync_runner.begin(state)
+    _run(sync_runner.run_sync(state, _ctx(tmp_path, state)))
+
+    status = sync_runner.get_status(state)
+    assert status["state"] == "error"
+    assert status["services"]["garmin"]["state"] == "error"
+    assert "rate-limited" in status["services"]["garmin"]["error"]
+    assert status["needs_mfa"] is False and status["needs_garmin_login"] is False
+    # A rebuild re-parses every GPX file; nothing synced, so keep the cache.
+    assert state.data is data
+
+
+def test_unexpected_exception_captured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: UserState
+) -> None:
+    """Non-SyncError exceptions should be caught and surfaced with a prefix."""
+
+    def crash(ctx: GarminSyncContext) -> None:
+        raise ValueError("boom")
+
+    _garmin(monkeypatch, crash)
+    sync_runner.begin(state)
+    _run(sync_runner.run_sync(state, _ctx(tmp_path, state)))
+
+    garmin_status = sync_runner.get_status(state)["services"]["garmin"]
+    assert garmin_status["state"] == "error"
+    assert "unexpected error" in garmin_status["error"]
+    assert "boom" in garmin_status["error"]
+
+
+def test_garmin_login_required_sets_needs_garmin_login(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: UserState
+) -> None:
+    def needs_login(ctx: GarminSyncContext) -> None:
+        raise GarminLoginRequiredError("Garmin rejected the username or password.")
+
+    _garmin(monkeypatch, needs_login)
+    data = _warm(state)
+    sync_runner.begin(state)
+    _run(sync_runner.run_sync(state, _ctx(tmp_path, state)))
+
+    status = sync_runner.get_status(state)
+    assert status["state"] == "error"
+    assert status["needs_garmin_login"] is True
+    assert status["needs_mfa"] is False
+    assert status["services"]["garmin"] == {
+        "state": "needs_garmin_login",
+        "error": "Garmin rejected the username or password.",
+    }
+    assert state.data is data
+
+    # The next run clears the flag.
+    sync_runner.begin(state)
+    assert sync_runner.get_status(state)["needs_garmin_login"] is False
+
+
+def test_garmin_mfa_required_sets_needs_mfa(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: UserState
+) -> None:
+    def garmin_mfa(ctx: GarminSyncContext) -> None:
+        raise MfaRequiredError("code please")
+
+    _garmin(monkeypatch, garmin_mfa)
+    sync_runner.begin(state)
+    _run(sync_runner.run_sync(state, _ctx(tmp_path, state)))
+
+    status = sync_runner.get_status(state)
+    assert status["state"] == "error"
+    assert status["needs_mfa"] is True
+    assert status["needs_garmin_login"] is False
+    assert status["services"]["garmin"]["state"] == "needs_mfa"
+
+    # The next run clears the flag.
+    sync_runner.begin(state)
+    assert sync_runner.get_status(state)["needs_mfa"] is False
+
+
+@pytest.mark.parametrize("outcome", ["ok", "login", "error"])
+def test_password_is_dropped_after_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: UserState, outcome: str
+) -> None:
+    seen: list[str | None] = []
+
+    def fake_sync(ctx: GarminSyncContext) -> None:
+        seen.append(ctx.password)
+        if outcome == "login":
+            raise GarminLoginRequiredError("nope")
+        if outcome == "error":
+            raise RuntimeError("crash")
+
+    _garmin(monkeypatch, fake_sync)
+    ctx = _ctx(tmp_path, state, password="garmin-pw")
+    sync_runner.begin(state)
+    _run(sync_runner.run_sync(state, ctx))
+
+    assert seen == ["garmin-pw"]
+    assert ctx.password is None
+    assert "garmin-pw" not in repr(ctx)
+    assert "garmin-pw" not in repr(sync_runner.get_status(state))
+
+
+def test_terminal_state_clears_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: UserState
+) -> None:
+    _garmin(monkeypatch, lambda ctx: None)
+    sync_runner.begin(state)
+    assert sync_runner.is_running(state) is True
+    _run(sync_runner.run_sync(state, _ctx(tmp_path, state)))
+    assert sync_runner.is_running(state) is False
+    assert sync_runner.get_status(state)["finished_at"] is not None
+
+
+def test_cancelled_run_does_not_stay_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: UserState
+) -> None:
+    """A run killed mid-flight (task cancelled on shutdown) must not leave the
+    user stuck in "running" — begin() would then 409 forever."""
+
+    def cancelled(ctx: GarminSyncContext) -> None:
+        raise asyncio.CancelledError
+
+    _garmin(monkeypatch, cancelled)
+    sync_runner.begin(state)
+    with pytest.raises(asyncio.CancelledError):
+        _run(sync_runner.run_sync(state, _ctx(tmp_path, state)))
+    status = sync_runner.get_status(state)
+    assert status["state"] == "error"
+    assert status["error"] == "sync interrupted"
+    assert status["finished_at"] is not None
+    assert sync_runner.begin(state) is True
+
+
+# ── Per-user isolation ───────────────────────────────────────────────
+
+
+def test_users_sync_independently(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("wishmap.strava.sync", lambda c, b: None)
-    monkeypatch.setattr("wishmap.garmin.sync", _raise_passphrase)
+    registry = StateRegistry()
+    alice, bob = registry.get(1), registry.get(2)
 
-    cfg = WishmapConfig(strava=_strava_cfg(), garmin=_garmin_cfg())
-    sync_runner.begin()
-    _run(sync_runner.run_sync(cfg, tmp_path))
+    # One user's in-flight sync doesn't 409 another's.
+    assert sync_runner.begin(alice) is True
+    assert sync_runner.begin(bob) is True
+    assert sync_runner.begin(alice) is False
 
-    status = sync_runner.get_status()
-    assert status["needs_passphrase"] is True
-    assert status["services"]["garmin"]["state"] == "needs_passphrase"
-    assert status["services"]["strava"]["state"] == "done"
+    def garmin_mfa(ctx: GarminSyncContext) -> None:
+        raise MfaRequiredError("code please")
 
+    _garmin(monkeypatch, garmin_mfa)
+    bob_data = _warm(bob)
+    _warm(alice)
+    _run(sync_runner.run_sync(alice, _ctx(tmp_path, alice)))
 
-def test_both_services_passphrase_required(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr("wishmap.strava.sync", _raise_passphrase)
-    monkeypatch.setattr("wishmap.garmin.sync", _raise_passphrase)
+    # Alice's MFA prompt and status stay hers; Bob is still mid-run.
+    assert sync_runner.get_status(alice)["needs_mfa"] is True
+    assert sync_runner.get_status(bob)["needs_mfa"] is False
+    assert sync_runner.is_running(bob) is True
+    assert bob.data is bob_data
 
-    cfg = WishmapConfig(strava=_strava_cfg(), garmin=_garmin_cfg())
-    sync_runner.begin()
-    _run(sync_runner.run_sync(cfg, tmp_path))
-
-    status = sync_runner.get_status()
-    assert status["needs_passphrase"] is True
-    assert status["services"]["strava"]["state"] == "needs_passphrase"
-    assert status["services"]["garmin"]["state"] == "needs_passphrase"
-
-
-def test_begin_clears_needs_passphrase_from_prior_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """After a failed sync sets the flag, the next begin() must reset it
-    so the frontend doesn't show a stale 'needs passphrase' state."""
-    monkeypatch.setattr("wishmap.strava.sync", _raise_passphrase)
-    cfg_strava = WishmapConfig(strava=_strava_cfg())
-
-    sync_runner.begin()
-    _run(sync_runner.run_sync(cfg_strava, tmp_path))
-    assert sync_runner.get_status()["needs_passphrase"] is True
-
-    # Now imagine the user unlocked and re-clicks Sync. begin() must clear
-    # the flag so a clean run looks clean.
-    monkeypatch.setattr("wishmap.strava.sync", lambda c, b: None)
-    sync_runner.begin()
-    assert sync_runner.get_status()["needs_passphrase"] is False
-    _run(sync_runner.run_sync(cfg_strava, tmp_path))
-    assert sync_runner.get_status()["needs_passphrase"] is False
-    assert sync_runner.get_status()["state"] == "done"
-
-
-def test_passphrase_required_not_masked_by_generic_sync_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Order-of-except matters: PassphraseRequiredError is a SyncError
-    subclass. The runner must catch the subclass first, otherwise the
-    flag is never set."""
-    monkeypatch.setattr("wishmap.strava.sync", _raise_passphrase)
-    cfg = WishmapConfig(strava=_strava_cfg())
-    sync_runner.begin()
-    _run(sync_runner.run_sync(cfg, tmp_path))
-
-    status = sync_runner.get_status()
-    assert status["needs_passphrase"] is True
-    # If the generic SyncError handler had caught it first, services.strava.state
-    # would be "error", not "needs_passphrase".
-    assert status["services"]["strava"]["state"] == "needs_passphrase"
+    _garmin(monkeypatch, lambda ctx: None)
+    _run(sync_runner.run_sync(bob, _ctx(tmp_path, bob)))
+    # Bob's sync invalidates only Bob's map.
+    assert bob.data is None
+    assert alice.data is not None

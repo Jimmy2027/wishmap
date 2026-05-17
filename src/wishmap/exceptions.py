@@ -9,35 +9,19 @@ class SyncError(Exception):
     """
 
 
-class PassphraseRequiredError(SyncError):
-    """`pass show` reached gpg-agent but no cached key was available.
+class MfaRequiredError(SyncError):
+    """Garmin's credential login is waiting for a one-time MFA code.
 
-    Surfaces to the web UI as `needs_passphrase: true` in the sync status
-    so the frontend can prompt for the GPG passphrase and POST it to
-    /api/unlock. Re-prompting is the recovery path.
+    The half-finished login is kept in memory by `garmin`; surfaces to the
+    web UI as `needs_mfa: true` in the sync status so the frontend can
+    prompt for the code and POST it to /api/garmin/mfa.
     """
 
 
-class BadPassphraseError(SyncError):
-    """User-supplied passphrase did not decrypt the warm-up entry.
+class GarminLoginRequiredError(SyncError):
+    """Garmin needs the user's password: no saved session works and none was given.
 
-    Returned from POST /api/unlock as 401. Re-prompting with a correct
-    passphrase is the recovery path.
-    """
-
-
-class LoopbackDisabledError(SyncError):
-    """gpg-agent.conf has `no-allow-loopback-pinentry` (or equivalent).
-
-    Returned from POST /api/unlock as 503. Re-prompting will not help —
-    the user must change their gpg-agent configuration.
-    """
-
-
-class AgentUnreachableError(SyncError):
-    """gpg-agent socket missing or unreachable.
-
-    Returned from POST /api/unlock as 503. Re-prompting will not help —
-    the user must fix their gpg-agent setup (start the daemon, set
-    GNUPGHOME, etc.).
+    Also raised when Garmin rejects the password. Surfaces to the web UI as
+    `needs_garmin_login: true` in the sync status, so the frontend asks for
+    the password and POSTs /api/sync again with it.
     """

@@ -8,4 +8,9 @@ dist/
 .claude/
 data/garmin/
 data/strava/
+data/users/
+data/wishmap.db
+data/wishmap.db-journal
+data/wishmap.db-wal
+data/wishmap.db-shm
 .gstack/

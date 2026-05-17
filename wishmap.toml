@@ -1,13 +1,44 @@
+# ── Server settings ─────────────────────────────────────────────────
+# These are the only keys the server reads. Pins, routes, ratings and
+# Garmin/Strava settings live per account in `<data_dir>/wishmap.db`.
+
 title = "wishmap"
+
+# Let anyone who can reach the server create an account. Turn off once
+# everyone has one; existing accounts can still log in.
+allow_registration = true
+
+# Mark the login cookies `Secure` (sent over HTTPS only). Turn on when the
+# server is reached over HTTPS, e.g. behind a TLS-terminating proxy.
+secure_cookies = false
+
+# How long a login lasts, in days (1–365).
+session_days = 30
+
+# Where the app keeps its state (wishmap.db, per-user GPX files), relative
+# to this file unless absolute.
+data_dir = "data"
+
+# ── Single-user data (before accounts) ──────────────────────────────
+# Everything below is NOT served: it is what `wishmap import-toml` moves into
+# an account (README, "Moving a single-user install into an account"):
+#
+#     uv run wishmap import-toml --user hendrik wishmap.toml
+#
+# The server logs one note about these keys at startup. Once imported they
+# can be deleted: the import copies the GPX files and the Strava activities
+# into the account's dir (data/users/<id>/), so the server no longer reads
+# data/garmin, data/routes or data/strava either.
+
 includes = ["data/garmin/garmin.toml"]
 
 [strava]
+api_sync = false  # Strava API is subscriber-only; import a Strava archive instead
 client_id = "230311"
-client_secret_pass = "strava_wishmap_client_secret"
 
 [garmin]
+activity_limit = 5000  # paged in chunks of 1000; keeps older activities on the map
 username = "hendrik.klug@gmail.com"
-password_pass = "Garmin"
 
 [[pins]]
 id = "pin-1"
@@ -22,13 +53,12 @@ notes = "Could be a good overnight stop"
 
 [[routes]]
 id = "route-1"
-name = "Weekend gravel loop"
+name = "CH_Chasseral_Road"
 sport = "biking"
-status = "planned"
-tags = ["gravel", "loop"]
-notes = "Try in late spring"
-color = "#2E86DE"
-gpx = "data/routes/weekend-gravel-loop.gpx"
+status = "idea"
+tags = ["roadbike", "loop"]
+notes = "https://www.strava.com/routes/3499498993111706860"
+gpx = "data/routes/CH_Chasseral_Road.gpx"
 
 [[routes]]
 id = "route-2"
@@ -37,5 +67,4 @@ sport = "ski_touring"
 status = "done"
 tags = ["winter"]
 notes = "Great descent"
-color = "#E74C3C"
 gpx = "data/routes/ski-tour-example.gpx"
