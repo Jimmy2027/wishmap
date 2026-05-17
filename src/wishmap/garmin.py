@@ -2,7 +2,6 @@
 
 import json
 import logging
-import subprocess
 import time
 from pathlib import Path
 
@@ -13,7 +12,7 @@ from garminconnect import (
     GarminConnectTooManyRequestsError,
 )
 
-from wishmap import strava
+from wishmap import secrets, strava
 from wishmap.exceptions import SyncError
 from wishmap.models import GarminConfig
 
@@ -51,35 +50,11 @@ def _map_sport(type_key: str) -> tuple[str, str]:
 
 def _get_password(garmin_config: GarminConfig) -> str:
     """Resolve the password from config (direct, file, or passwordstore)."""
-    if garmin_config.password:
-        return garmin_config.password
-    if garmin_config.password_file:
-        path = Path(garmin_config.password_file).expanduser()
-        return path.read_text().strip()
-    if garmin_config.password_pass:
-        try:
-            result = subprocess.run(
-                ["pass", "show", garmin_config.password_pass],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except FileNotFoundError as e:
-            raise SyncError(
-                "'pass' is not on PATH — install passwordstore.org or use "
-                "password_file / password in the [garmin] config."
-            ) from e
-        except subprocess.CalledProcessError as e:
-            stderr = (e.stderr or "").strip() or f"exit {e.returncode}"
-            raise SyncError(
-                f"Could not read Garmin password from pass entry "
-                f"'{garmin_config.password_pass}': {stderr}. "
-                "If you're running wishmap as a background service, gpg-agent "
-                "may need to be unlocked in that environment first."
-            ) from e
-        return result.stdout.splitlines()[0].strip()
-    raise SyncError(
-        "Garmin config needs one of 'password', 'password_file', or 'password_pass'"
+    return secrets.resolve_secret(
+        direct=garmin_config.password,
+        file_path=garmin_config.password_file,
+        pass_entry=garmin_config.password_pass,
+        label="Garmin",
     )
 
 

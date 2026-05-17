@@ -106,7 +106,9 @@ def test_status_payload_shape(client: TestClient) -> None:
         "finished_at",
         "services",
         "error",
+        "needs_passphrase",
     }
+    assert body["needs_passphrase"] is False
     for svc in ("strava", "garmin"):
         assert set(body["services"][svc].keys()) == {"state", "error"}
 

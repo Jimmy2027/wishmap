@@ -8,12 +8,18 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, Response
+from pydantic import BaseModel
 
-from wishmap import ratings, sync_runner
+from wishmap import ratings, secrets, sync_runner
 from wishmap.config import load_config, resolve_config_path
-from wishmap.exceptions import SyncError
+from wishmap.exceptions import (
+    AgentUnreachableError,
+    BadPassphraseError,
+    LoopbackDisabledError,
+    SyncError,
+)
 from wishmap.geojson import pins_to_geojson, route_start_pins_to_geojson, routes_to_geojson
 from wishmap.models import (
     ConfigResponse,
@@ -22,6 +28,10 @@ from wishmap.models import (
     RouteRatingIn,
     WishmapConfig,
 )
+
+
+class UnlockRequest(BaseModel):
+    passphrase: str
 
 _config: WishmapConfig
 _config_path: Path
@@ -141,6 +151,86 @@ async def post_sync() -> JSONResponse:
 @app.get("/api/sync/status")
 async def get_sync_status() -> dict[str, object]:
     return sync_runner.get_status()
+
+
+def _warm_entries(config: WishmapConfig) -> list[str]:
+    """Build the deduplicated list of pass entries to warm in /api/unlock.
+
+    Precedence (deterministic, design A3):
+      1. config.warm_pass_entry — smoke-test entry first
+      2. strava.client_secret_pass
+      3. garmin.password_pass
+
+    Duplicates are dropped while preserving order. Empty strings dropped.
+    """
+    candidates: list[str] = []
+    if config.warm_pass_entry:
+        candidates.append(config.warm_pass_entry)
+    if config.strava is not None and config.strava.client_secret_pass:
+        candidates.append(config.strava.client_secret_pass)
+    if config.garmin is not None and config.garmin.password_pass:
+        candidates.append(config.garmin.password_pass)
+    seen: set[str] = set()
+    out: list[str] = []
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
+
+
+@app.post("/api/unlock")
+async def post_unlock(req: UnlockRequest, request: Request) -> Response:
+    """Warm gpg-agent against every configured pass entry.
+
+    On success (all entries warmed), subsequent `pass show` calls during
+    `default-cache-ttl` succeed without prompting — the web UI can then
+    POST /api/sync and reach completion.
+
+    Single-user self-hosted: knowing the GPG passphrase is the auth model.
+    Sec-Fetch-Site is checked defensively against cross-origin posts from
+    other tabs.
+    """
+    fetch_site = request.headers.get("sec-fetch-site")
+    if fetch_site and fetch_site not in ("same-origin", "none"):
+        # "none" covers direct navigation / curl without the header;
+        # cross-site / same-site / cross-origin requests are rejected.
+        return JSONResponse(
+            status_code=403, content={"reason": "cross_origin_blocked"}
+        )
+
+    entries = _warm_entries(_config)
+    if not entries:
+        return JSONResponse(
+            status_code=400, content={"reason": "no_pass_entries_configured"}
+        )
+
+    for entry in entries:
+        try:
+            await asyncio.to_thread(
+                secrets.warm_gpg_agent, entry, req.passphrase
+            )
+        except BadPassphraseError:
+            return JSONResponse(
+                status_code=401,
+                content={"reason": "bad_passphrase", "entry": entry},
+            )
+        except LoopbackDisabledError as e:
+            return JSONResponse(
+                status_code=503,
+                content={"reason": "loopback_disabled", "hint": str(e)},
+            )
+        except AgentUnreachableError as e:
+            return JSONResponse(
+                status_code=503,
+                content={"reason": "agent_unreachable", "hint": str(e)},
+            )
+        except SyncError as e:
+            return JSONResponse(
+                status_code=500,
+                content={"reason": "unknown", "detail": str(e)},
+            )
+    return Response(status_code=204)
 
 
 def main() -> None:

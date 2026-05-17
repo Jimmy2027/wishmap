@@ -252,6 +252,104 @@
     min-height: 12px;
   }
 
+  /* ── Unlock modal ── */
+  .unlock-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(20, 20, 20, 0.55);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 1500;
+  }
+  .unlock-overlay.visible { display: flex; }
+
+  .unlock-modal {
+    background: var(--bg-elev);
+    border: 1px solid var(--stone-300);
+    border-radius: 8px;
+    padding: 20px 22px;
+    width: 320px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+    font-size: 13px;
+  }
+  .unlock-modal h3 {
+    margin: 0 0 10px;
+    font-size: 14px;
+    color: var(--stone-700);
+  }
+  .unlock-modal p {
+    margin: 0 0 12px;
+    color: var(--stone-500);
+    line-height: 1.4;
+  }
+  .unlock-modal input[type="password"] {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--stone-300);
+    border-radius: 4px;
+    font: inherit;
+    box-sizing: border-box;
+  }
+  .unlock-modal .unlock-error {
+    margin-top: 8px;
+    color: var(--trail-red);
+    min-height: 14px;
+    font-size: 11px;
+  }
+  .unlock-modal .unlock-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 14px;
+  }
+  .unlock-modal button {
+    padding: 6px 14px;
+    border: 1px solid var(--stone-400);
+    background: var(--bg-elev);
+    border-radius: 4px;
+    cursor: pointer;
+    font: inherit;
+  }
+  .unlock-modal button.primary {
+    background: var(--stone-700);
+    color: var(--bg-elev);
+    border-color: var(--stone-700);
+  }
+  .unlock-modal button:disabled {
+    opacity: 0.6;
+    cursor: wait;
+  }
+
+  /* Fatal banner — shown when re-prompting can't recover (loopback
+     disabled, agent unreachable). Sits over the map until dismissed. */
+  .fatal-banner {
+    position: fixed;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--trail-red);
+    color: var(--bg-elev);
+    padding: 10px 16px;
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    z-index: 1600;
+    max-width: 480px;
+    font-size: 12px;
+    display: none;
+    line-height: 1.4;
+  }
+  .fatal-banner.visible { display: block; }
+  .fatal-banner button {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    color: var(--bg-elev);
+    margin-left: 12px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+
   /* ── Routes drawer ── */
   .routes-drawer {
     position: fixed;
@@ -635,6 +733,26 @@
   </div>
   <div class="drawer-list" id="drawer-list"></div>
 </aside>
+
+<div class="unlock-overlay" id="unlock-overlay" role="dialog" aria-modal="true" aria-labelledby="unlock-title">
+  <div class="unlock-modal">
+    <h3 id="unlock-title">GPG passphrase needed</h3>
+    <p id="unlock-prompt">Sync needs to unlock your <code>pass</code> entries. Enter your GPG passphrase to warm gpg-agent.</p>
+    <form id="unlock-form">
+      <input id="unlock-input" type="password" autocomplete="current-password" autofocus />
+      <div class="unlock-error" id="unlock-error"></div>
+      <div class="unlock-actions">
+        <button type="button" id="unlock-cancel">Cancel</button>
+        <button type="submit" id="unlock-submit" class="primary">Unlock</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="fatal-banner" id="fatal-banner" role="alert">
+  <span id="fatal-banner-text"></span>
+  <button type="button" id="fatal-banner-dismiss">Dismiss</button>
+</div>
 
 <div id="map"></div>
 
@@ -1051,17 +1169,171 @@
       setSyncButtonState(status.state, status);
       // Even on partial error, one service may have produced new data — refresh.
       if (status.state === 'done' || status.state === 'error') refreshMapData();
+      // If sync stalled on a locked gpg-agent, prompt the user to unlock.
+      if (status.needs_passphrase) showUnlockModal();
     }, 2000);
   }
 
+  // ── Unlock modal ──
+  // When sync surfaces needs_passphrase=true (gpg-agent has no cached key
+  // and resolve_secret can't read the pass entry), this modal collects the
+  // GPG passphrase and POSTs it to /api/unlock. Three failure modes:
+  //   401 bad_passphrase     → keep modal, decrement attempts, prompt again
+  //   503 loopback_disabled  → close modal, show fatal banner (re-prompt won't help)
+  //   503 agent_unreachable  → close modal, show fatal banner
+  //   500 unknown            → close modal, show fatal banner
+  // On 204, wait for top-level sync state to leave "running" before
+  // re-POSTing /api/sync (A2 fix — the prior sync task is still finishing
+  // its per-service error capture and reload_data).
+  const unlockOverlay = document.getElementById('unlock-overlay');
+  const unlockForm = document.getElementById('unlock-form');
+  const unlockInput = document.getElementById('unlock-input');
+  const unlockError = document.getElementById('unlock-error');
+  const unlockSubmit = document.getElementById('unlock-submit');
+  const unlockCancel = document.getElementById('unlock-cancel');
+  const fatalBanner = document.getElementById('fatal-banner');
+  const fatalBannerText = document.getElementById('fatal-banner-text');
+  const fatalBannerDismiss = document.getElementById('fatal-banner-dismiss');
+
+  const MAX_UNLOCK_ATTEMPTS = 3;
+  let unlockAttempts = 0;
+
+  function showUnlockModal(message) {
+    unlockError.textContent = message || '';
+    unlockInput.value = '';
+    unlockOverlay.classList.add('visible');
+    // Defer focus so the browser actually moves the cursor into the input.
+    setTimeout(() => unlockInput.focus(), 0);
+  }
+
+  function hideUnlockModal() {
+    unlockOverlay.classList.remove('visible');
+    unlockInput.value = '';
+    unlockError.textContent = '';
+    unlockSubmit.disabled = false;
+  }
+
+  function showFatalBanner(message) {
+    fatalBannerText.textContent = message;
+    fatalBanner.classList.add('visible');
+  }
+
+  fatalBannerDismiss.addEventListener('click', () => {
+    fatalBanner.classList.remove('visible');
+    fatalBannerText.textContent = '';
+  });
+
+  unlockCancel.addEventListener('click', () => {
+    hideUnlockModal();
+    // Don't reset unlockAttempts — user can click Sync again to retry fresh.
+    setSyncButtonState('error', { error: 'Unlock cancelled.' });
+  });
+
+  // Wait for top-level sync state to leave "running". Resolves with the
+  // status object on the first non-running tick. Polls every 500ms.
+  function waitForSyncIdle() {
+    return new Promise((resolve, reject) => {
+      const tick = async () => {
+        try {
+          const s = await fetch('/api/sync/status').then(r => r.json());
+          if (s.state !== 'running') return resolve(s);
+        } catch (e) {
+          return reject(e);
+        }
+        setTimeout(tick, 500);
+      };
+      tick();
+    });
+  }
+
+  async function postSyncStart() {
+    const resp = await fetch('/api/sync', { method: 'POST' });
+    const status = await resp.json();
+    setSyncButtonState(status.state, status);
+    if (status.state === 'running') startSyncPoll();
+    return status;
+  }
+
+  unlockForm.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const passphrase = unlockInput.value;
+    if (!passphrase) return;
+    unlockSubmit.disabled = true;
+    unlockError.textContent = '';
+    let resp;
+    try {
+      resp = await fetch('/api/unlock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ passphrase }),
+      });
+    } catch (e) {
+      console.warn('Unlock POST failed', e);
+      hideUnlockModal();
+      showFatalBanner('Could not reach server.');
+      return;
+    }
+    // Drop the passphrase as soon as the request is in flight.
+    // (unlockInput is cleared by hideUnlockModal too.)
+    if (resp.status === 204) {
+      hideUnlockModal();
+      unlockAttempts = 0;
+      try {
+        await waitForSyncIdle();
+        await postSyncStart();
+      } catch (e) {
+        console.warn('Post-unlock retry failed', e);
+        setSyncButtonState('error', { error: 'Retry after unlock failed.' });
+      }
+      return;
+    }
+    let body = {};
+    try { body = await resp.json(); } catch { /* ignore */ }
+    if (resp.status === 401) {
+      unlockAttempts += 1;
+      if (unlockAttempts >= MAX_UNLOCK_ATTEMPTS) {
+        hideUnlockModal();
+        unlockAttempts = 0;
+        showFatalBanner('Too many wrong attempts. Click Sync to try again.');
+        setSyncButtonState('error', { error: 'Unlock failed.' });
+        return;
+      }
+      const entry = body.entry ? ` for entry '${body.entry}'` : '';
+      unlockError.textContent = `Wrong passphrase${entry}. Try again.`;
+      unlockSubmit.disabled = false;
+      unlockInput.value = '';
+      unlockInput.focus();
+      return;
+    }
+    if (resp.status === 503) {
+      hideUnlockModal();
+      unlockAttempts = 0;
+      const hint = body.hint || 'Re-prompting will not help.';
+      showFatalBanner(`Unlock unrecoverable (${body.reason || resp.status}): ${hint}`);
+      setSyncButtonState('error', { error: hint });
+      return;
+    }
+    if (resp.status === 400) {
+      hideUnlockModal();
+      unlockAttempts = 0;
+      showFatalBanner('No pass entries are configured — unlock has nothing to do.');
+      return;
+    }
+    // 500 / unexpected
+    hideUnlockModal();
+    unlockAttempts = 0;
+    const detail = body.detail || `HTTP ${resp.status}`;
+    showFatalBanner(`Unlock failed: ${detail}`);
+    setSyncButtonState('error', { error: detail });
+  });
+
   syncButton.addEventListener('click', async () => {
     if (syncButton.disabled) return;
+    fatalBanner.classList.remove('visible');
+    unlockAttempts = 0;
     setSyncButtonState('running');
     try {
-      const resp = await fetch('/api/sync', { method: 'POST' });
-      const status = await resp.json();
-      setSyncButtonState(status.state, status);
-      if (status.state === 'running') startSyncPoll();
+      await postSyncStart();
     } catch (e) {
       console.warn('Sync POST failed', e);
       setSyncButtonState('error', { error: 'Could not reach server' });

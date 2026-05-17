@@ -16,6 +16,9 @@ State machine
                        ▼
         for svc in [strava, garmin]:
           try: svc.sync(...)
+          except PassphraseRequiredError as e:
+            services[svc]={state:"needs_passphrase", error:str(e)}
+            top-level needs_passphrase = True
           except SyncError as e:
             services[svc]={state:"error", error:str(e)}
           else:
@@ -29,6 +32,12 @@ State machine
                        ▼
               finished_at = now
 
+Top-level state stays in {idle, running, done, error}. The
+`needs_passphrase` flag is a separate signal — when True, the web UI
+shows the unlock modal instead of an error tooltip, regardless of
+top-level state (typically `error` because needs_passphrase implies a
+service didn't reach "done").
+
 Status dict shape (returned by get_status, JSON-serialized to the UI):
 
     {
@@ -36,10 +45,13 @@ Status dict shape (returned by get_status, JSON-serialized to the UI):
       "started_at": ISO-8601 or null,
       "finished_at": ISO-8601 or null,
       "services": {
-        "strava": {"state": "idle|skipped|running|done|error", "error": str|null},
-        "garmin": {"state": "idle|skipped|running|done|error", "error": str|null}
+        "strava": {"state": "idle|skipped|running|done|error|needs_passphrase",
+                   "error": str|null},
+        "garmin": {"state": "idle|skipped|running|done|error|needs_passphrase",
+                   "error": str|null}
       },
-      "error": str|null  # top-level error (e.g., reload_data failure)
+      "error": str|null,         # top-level error (e.g., reload_data failure)
+      "needs_passphrase": bool   # any service blocked on gpg-agent unlock
     }
 
 uvicorn dev-server reload note: sync writes to data/garmin/*.gpx,
@@ -56,7 +68,7 @@ from pathlib import Path
 from typing import Any
 
 from wishmap import garmin, strava
-from wishmap.exceptions import SyncError
+from wishmap.exceptions import PassphraseRequiredError, SyncError
 from wishmap.models import WishmapConfig
 
 logger = logging.getLogger("wishmap.sync_runner")
@@ -78,6 +90,11 @@ def _initial_status() -> dict[str, Any]:
             "garmin": {"state": "idle", "error": None},
         },
         "error": None,
+        # True when any service raised PassphraseRequiredError this run.
+        # Cleared by begin() on the next sync attempt. The frontend uses
+        # this to decide whether to show the unlock modal vs an error
+        # tooltip.
+        "needs_passphrase": False,
     }
 
 
@@ -95,6 +112,7 @@ def get_status() -> dict[str, Any]:
             "garmin": dict(_status["services"]["garmin"]),
         },
         "error": _status["error"],
+        "needs_passphrase": _status["needs_passphrase"],
     }
 
 
@@ -124,6 +142,7 @@ def begin() -> bool:
     _status["started_at"] = _now_iso()
     _status["finished_at"] = None
     _status["error"] = None
+    _status["needs_passphrase"] = False
     for svc in ("strava", "garmin"):
         _status["services"][svc] = {"state": "idle", "error": None}
     return True
@@ -150,6 +169,13 @@ async def run_sync(config: WishmapConfig, base_path: Path) -> None:
                 _status["services"]["strava"]["state"] = "running"
                 try:
                     await asyncio.to_thread(strava.sync, config.strava, base_path)
+                except PassphraseRequiredError as e:
+                    logger.warning("Strava sync needs passphrase: %s", e)
+                    _status["services"]["strava"] = {
+                        "state": "needs_passphrase",
+                        "error": str(e),
+                    }
+                    _status["needs_passphrase"] = True
                 except SyncError as e:
                     logger.warning("Strava sync failed: %s", e)
                     _status["services"]["strava"] = {
@@ -176,6 +202,13 @@ async def run_sync(config: WishmapConfig, base_path: Path) -> None:
                     await asyncio.to_thread(
                         garmin.sync, config.garmin, base_path, strava_db
                     )
+                except PassphraseRequiredError as e:
+                    logger.warning("Garmin sync needs passphrase: %s", e)
+                    _status["services"]["garmin"] = {
+                        "state": "needs_passphrase",
+                        "error": str(e),
+                    }
+                    _status["needs_passphrase"] = True
                 except SyncError as e:
                     logger.warning("Garmin sync failed: %s", e)
                     _status["services"]["garmin"] = {

@@ -4,7 +4,6 @@ import json
 import logging
 import os
 import sqlite3
-import subprocess
 import time
 import urllib.error
 import urllib.parse
@@ -14,6 +13,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from wishmap import secrets
 from wishmap.exceptions import SyncError
 from wishmap.models import StravaConfig
 
@@ -69,35 +69,11 @@ def _map_sport(sport_type: str) -> tuple[str, str | None]:
 
 
 def _get_client_secret(cfg: StravaConfig) -> str:
-    if cfg.client_secret:
-        return cfg.client_secret
-    if cfg.client_secret_file:
-        return Path(cfg.client_secret_file).expanduser().read_text().strip()
-    if cfg.client_secret_pass:
-        try:
-            result = subprocess.run(
-                ["pass", "show", cfg.client_secret_pass],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except FileNotFoundError as e:
-            raise SyncError(
-                "'pass' is not on PATH — install passwordstore.org or use "
-                "client_secret_file / client_secret in the [strava] config."
-            ) from e
-        except subprocess.CalledProcessError as e:
-            stderr = (e.stderr or "").strip() or f"exit {e.returncode}"
-            raise SyncError(
-                f"Could not read Strava client secret from pass entry "
-                f"'{cfg.client_secret_pass}': {stderr}. "
-                "If you're running wishmap as a background service, gpg-agent "
-                "may need to be unlocked in that environment first."
-            ) from e
-        return result.stdout.splitlines()[0].strip()
-    raise SyncError(
-        "Strava config needs one of 'client_secret', 'client_secret_file', "
-        "or 'client_secret_pass'"
+    return secrets.resolve_secret(
+        direct=cfg.client_secret,
+        file_path=cfg.client_secret_file,
+        pass_entry=cfg.client_secret_pass,
+        label="Strava",
     )
 
 

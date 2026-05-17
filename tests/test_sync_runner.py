@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 
 from wishmap import sync_runner
-from wishmap.exceptions import SyncError
+from wishmap.exceptions import PassphraseRequiredError, SyncError
 from wishmap.models import GarminConfig, StravaConfig, WishmapConfig
 
 
@@ -240,3 +240,117 @@ def test_terminal_state_clears_running(
     _run(sync_runner.run_sync(cfg, tmp_path))
     assert sync_runner.is_running() is False
     assert sync_runner.get_status()["finished_at"] is not None
+
+
+# ── needs_passphrase flag plumbing ────────────────────────────────────
+
+
+def _raise_passphrase(_cfg: Any, _base: Path, *args: Any) -> None:
+    raise PassphraseRequiredError(
+        "gpg-agent has no cached key for pass entry 'wishmap/x'"
+    )
+
+
+def test_initial_status_has_needs_passphrase_false() -> None:
+    assert sync_runner.get_status()["needs_passphrase"] is False
+
+
+def test_strava_passphrase_required_sets_flag_and_continues_to_garmin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When Strava raises PassphraseRequiredError, Garmin must still
+    attempt — if it has its own credentials it might succeed."""
+    monkeypatch.setattr("wishmap.strava.sync", _raise_passphrase)
+    garmin_called = {"count": 0}
+
+    def garmin_sync(_c: Any, _b: Path, _d: Any = None) -> None:
+        garmin_called["count"] += 1
+
+    monkeypatch.setattr("wishmap.garmin.sync", garmin_sync)
+
+    cfg = WishmapConfig(strava=_strava_cfg(), garmin=_garmin_cfg())
+    sync_runner.begin()
+    _run(sync_runner.run_sync(cfg, tmp_path))
+
+    status = sync_runner.get_status()
+    assert status["needs_passphrase"] is True
+    assert status["services"]["strava"]["state"] == "needs_passphrase"
+    assert "wishmap/x" in (status["services"]["strava"]["error"] or "")
+    # Garmin still ran (and presumably succeeded in this fixture).
+    assert garmin_called["count"] == 1
+    assert status["services"]["garmin"]["state"] == "done"
+    # Top-level state is "error" because not every service reached "done"
+    # — the flag is the separate signal.
+    assert status["state"] == "error"
+
+
+def test_garmin_passphrase_required_sets_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("wishmap.strava.sync", lambda c, b: None)
+    monkeypatch.setattr("wishmap.garmin.sync", _raise_passphrase)
+
+    cfg = WishmapConfig(strava=_strava_cfg(), garmin=_garmin_cfg())
+    sync_runner.begin()
+    _run(sync_runner.run_sync(cfg, tmp_path))
+
+    status = sync_runner.get_status()
+    assert status["needs_passphrase"] is True
+    assert status["services"]["garmin"]["state"] == "needs_passphrase"
+    assert status["services"]["strava"]["state"] == "done"
+
+
+def test_both_services_passphrase_required(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("wishmap.strava.sync", _raise_passphrase)
+    monkeypatch.setattr("wishmap.garmin.sync", _raise_passphrase)
+
+    cfg = WishmapConfig(strava=_strava_cfg(), garmin=_garmin_cfg())
+    sync_runner.begin()
+    _run(sync_runner.run_sync(cfg, tmp_path))
+
+    status = sync_runner.get_status()
+    assert status["needs_passphrase"] is True
+    assert status["services"]["strava"]["state"] == "needs_passphrase"
+    assert status["services"]["garmin"]["state"] == "needs_passphrase"
+
+
+def test_begin_clears_needs_passphrase_from_prior_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After a failed sync sets the flag, the next begin() must reset it
+    so the frontend doesn't show a stale 'needs passphrase' state."""
+    monkeypatch.setattr("wishmap.strava.sync", _raise_passphrase)
+    cfg_strava = WishmapConfig(strava=_strava_cfg())
+
+    sync_runner.begin()
+    _run(sync_runner.run_sync(cfg_strava, tmp_path))
+    assert sync_runner.get_status()["needs_passphrase"] is True
+
+    # Now imagine the user unlocked and re-clicks Sync. begin() must clear
+    # the flag so a clean run looks clean.
+    monkeypatch.setattr("wishmap.strava.sync", lambda c, b: None)
+    sync_runner.begin()
+    assert sync_runner.get_status()["needs_passphrase"] is False
+    _run(sync_runner.run_sync(cfg_strava, tmp_path))
+    assert sync_runner.get_status()["needs_passphrase"] is False
+    assert sync_runner.get_status()["state"] == "done"
+
+
+def test_passphrase_required_not_masked_by_generic_sync_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Order-of-except matters: PassphraseRequiredError is a SyncError
+    subclass. The runner must catch the subclass first, otherwise the
+    flag is never set."""
+    monkeypatch.setattr("wishmap.strava.sync", _raise_passphrase)
+    cfg = WishmapConfig(strava=_strava_cfg())
+    sync_runner.begin()
+    _run(sync_runner.run_sync(cfg, tmp_path))
+
+    status = sync_runner.get_status()
+    assert status["needs_passphrase"] is True
+    # If the generic SyncError handler had caught it first, services.strava.state
+    # would be "error", not "needs_passphrase".
+    assert status["services"]["strava"]["state"] == "needs_passphrase"

@@ -142,6 +142,67 @@ metadata when activities match (within ±5 min and ±5% distance).
    and overrides `name` and `sport` on matched routes; the `strava` tag is
    appended so you can filter on it.
 
+## Web-UI sync and headless gpg-agent
+
+The web UI's "↻ Sync" button POSTs to `/api/sync`, which calls the same Strava
+and Garmin sync paths as `wishmap --sync`. When wishmap runs as a long-lived
+service (systemd, Docker, headless box) and you use `password_pass` /
+`client_secret_pass`, `gpg-agent` has no TTY to prompt for the GPG passphrase
+the first time it's needed. To handle this, wishmap exposes a `POST /api/unlock`
+endpoint and the frontend prompts you for the passphrase inline.
+
+For this to work, gpg-agent must accept the loopback pinentry that wishmap
+uses to deliver the passphrase. Add the following to `~/.gnupg/gpg-agent.conf`:
+
+```
+allow-loopback-pinentry
+
+# How long gpg-agent caches the unlocked key after one unlock.
+# 28800 = 8 hours. Tune to taste.
+default-cache-ttl 28800
+max-cache-ttl 28800
+```
+
+Then reload the agent:
+
+```bash
+gpgconf --reload gpg-agent
+```
+
+### Running under systemd
+
+systemd units don't inherit your interactive shell's `GNUPGHOME`, so be
+explicit:
+
+```ini
+[Service]
+Environment=GNUPGHOME=/home/YOU/.gnupg
+ExecStartPre=/usr/bin/gpg-agent --daemon --quiet
+ExecStart=/path/to/uv run wishmap --host 0.0.0.0 --port 8000
+User=YOU
+```
+
+When you first click "↻ Sync" in the browser, you'll get a passphrase modal.
+Type your GPG passphrase once; it unlocks every configured pass entry in one
+shot and gpg-agent caches the keys for `default-cache-ttl`. Subsequent syncs
+inside that window run without a prompt.
+
+If your `garmin.password_pass` and `strava.client_secret_pass` are encrypted
+to different keys, the modal will pop a second time after the first unlock
+succeeds — that's how you know they're not a shared key.
+
+### Optional: `warm_pass_entry`
+
+If you'd rather have `/api/unlock` verify against a specific (e.g. fast)
+entry instead of warming both, set:
+
+```toml
+warm_pass_entry = "wishmap/smoke-test"
+```
+
+at the top of `wishmap.toml`. That entry is warmed first; the configured
+service entries follow.
+
 ## Ratings
 
 Each route can be rated 1-5 on three axes: Fun, Difficulty, and Scenery. Click

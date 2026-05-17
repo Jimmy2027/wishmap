@@ -72,6 +72,12 @@ class StravaConfig(BaseModel):
 class WishmapConfig(BaseModel):
     title: str = "wishmap"
     includes: list[str] = []
+    # Optional pass entry to use as the smoke-test target when warming
+    # gpg-agent via POST /api/unlock. If unset, the union of
+    # garmin.password_pass and strava.client_secret_pass is used.
+    # Set this only if you want unlock to verify against a specific
+    # entry (e.g. one encrypted to a fast subkey).
+    warm_pass_entry: str = ""
     garmin: GarminConfig | None = None
     strava: StravaConfig | None = None
     pins: list[PinConfig] = []
