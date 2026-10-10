@@ -99,6 +99,11 @@ back to `Origin`), so another site can't act through a logged-in browser.
 
 - **＋ Add route**: paste a Strava route link (optional) and upload its
   exported GPX (up to 10 MB), then set name, sport, status and tags.
+  A public **Ride with GPS** trip or route link
+  (`https://ridewithgps.com/trips/…` or `/routes/…`) needs no file: the
+  server downloads the track and takes its name (unless you give one) and
+  description. Importing the same link again replaces the route. Private
+  items can't be fetched this way — download their GPX and upload it.
 - **＋ Add pin**: click the button, then the map where the pin goes.
 - **Edit / delete**: the ✎ Edit and ✕ buttons in a route's or pin's popup.
   A route's GPX can't be edited — delete the route and add it again.

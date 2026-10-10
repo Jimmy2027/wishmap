@@ -1431,11 +1431,11 @@
 <div class="addroute-overlay" id="addroute-overlay" role="dialog" aria-modal="true" aria-labelledby="addroute-title">
   <div class="addroute-modal">
     <h3 id="addroute-title">Add a route</h3>
-    <p id="addroute-intro">Paste a Strava route link and attach its exported <code>.gpx</code>. Works for any public route — no Strava login needed.</p>
+    <p id="addroute-intro">Paste a public Ride with GPS trip or route link to import it directly, or attach a <code>.gpx</code> (e.g. a Strava route's export) with an optional link to it.</p>
     <p class="ar-note" id="ar-sync-note" hidden>This route comes from Garmin: the next sync overwrites changes made here.</p>
     <form id="addroute-form">
-      <label id="ar-url-label">Strava URL
-        <input id="ar-url" type="url" placeholder="https://www.strava.com/routes/…" />
+      <label id="ar-url-label">Link
+        <input id="ar-url" type="url" placeholder="https://ridewithgps.com/trips/… or https://www.strava.com/routes/…" />
       </label>
       <label id="ar-gpx-label">GPX file
         <input id="ar-gpx" type="file" accept=".gpx,application/gpx+xml,application/xml,text/xml" required />
@@ -2942,6 +2942,24 @@ document.addEventListener('DOMContentLoaded', function () {
   // The id of the route the modal is editing; null while it adds one.
   let editingRouteId = null;
 
+  // A Ride with GPS trip/route link is imported server-side
+  // (POST /routes/import), so it needs no GPX and may leave the name blank.
+  const RWGPS_URL_RE = /^https?:\/\/(www\.)?ridewithgps\.com\/(trips|routes)\/\d+/i;
+
+  function importingFromLink() {
+    return editingRouteId === null && RWGPS_URL_RE.test(arUrl.value.trim());
+  }
+
+  function syncImportMode() {
+    const editing = editingRouteId !== null;
+    const importing = importingFromLink();
+    arGpxLabel.hidden = editing || importing;
+    arGpx.required = !editing && !importing;
+    arName.required = !importing;
+    arName.placeholder = importing ? 'Leave blank to use the Ride with GPS name' : '';
+    if (!editing) addrouteSubmit.textContent = importing ? 'Import route' : 'Add route';
+  }
+
   // Switch the modal between adding (editId null) and editing a route.
   function setRouteModalMode(editId) {
     editingRouteId = editId;
@@ -2949,12 +2967,11 @@ document.addEventListener('DOMContentLoaded', function () {
     addrouteTitle.textContent = editing ? 'Edit route' : 'Add a route';
     addrouteIntro.hidden = editing;
     arUrlLabel.hidden = editing;
-    arGpxLabel.hidden = editing;
-    arGpx.required = !editing;
+    syncImportMode();
     arNotesLabel.hidden = !editing;
     // Garmin routes are rewritten by every sync, edits included.
     arSyncNote.hidden = !(editing && editId.startsWith('garmin-'));
-    addrouteSubmit.textContent = editing ? 'Save' : 'Add route';
+    if (editing) addrouteSubmit.textContent = 'Save';
   }
 
   function showAddRouteModal() {
@@ -3014,7 +3031,7 @@ document.addEventListener('DOMContentLoaded', function () {
       const msgs = detail.map(d => d && d.msg).filter(Boolean);
       if (msgs.length) return msgs.join('; ');
     }
-    if (status === 422) return 'Invalid input — check the GPX, name, and status.';
+    if (status === 422) return 'Invalid input — check the link or GPX, name, and status.';
     return `Could not add route (HTTP ${status}).`;
   }
 
@@ -3153,6 +3170,7 @@ document.addEventListener('DOMContentLoaded', function () {
   document.addEventListener('keydown', (ev) => {
     if (ev.key === 'Escape' && addrouteOverlay.classList.contains('visible')) hideAddRouteModal();
   });
+  arUrl.addEventListener('input', syncImportMode);
   arGpx.addEventListener('change', () => {
     const file = arGpx.files && arGpx.files[0];
     if (file) prefillNameFromGpx(file);
@@ -3164,26 +3182,42 @@ document.addEventListener('DOMContentLoaded', function () {
       await submitRouteEdit();
       return;
     }
-    const file = arGpx.files && arGpx.files[0];
-    if (!file) { addrouteError.textContent = 'Attach the exported .gpx file.'; return; }
-    if (!arName.value.trim()) { addrouteError.textContent = 'Give the route a name.'; return; }
+    const importing = importingFromLink();
+    let send;
+    if (importing) {
+      const payload = {
+        url: arUrl.value.trim(),
+        sport: arSport.value,
+        status: arStatus.value,
+        tags: parseTags(arTags.value),
+      };
+      if (arName.value.trim()) payload.name = arName.value.trim();
+      send = () => apiSendJson('POST', '/routes/import', payload);
+    } else {
+      const file = arGpx.files && arGpx.files[0];
+      if (!file) { addrouteError.textContent = 'Attach the exported .gpx file.'; return; }
+      if (!arName.value.trim()) { addrouteError.textContent = 'Give the route a name.'; return; }
 
-    const fd = new FormData();
-    fd.append('strava_url', arUrl.value.trim());
-    fd.append('name', arName.value.trim());
-    fd.append('sport', arSport.value);
-    fd.append('status', arStatus.value);
-    fd.append('tags', arTags.value);
-    fd.append('gpx_file', file, file.name);
+      const fd = new FormData();
+      fd.append('strava_url', arUrl.value.trim());
+      fd.append('name', arName.value.trim());
+      fd.append('sport', arSport.value);
+      fd.append('status', arStatus.value);
+      fd.append('tags', arTags.value);
+      fd.append('gpx_file', file, file.name);
+      send = () => apiFetch('/routes', { method: 'POST', body: fd });
+    }
 
     addrouteSubmit.disabled = true;
+    if (importing) addrouteSubmit.textContent = 'Importing…';
     addrouteError.textContent = '';
     let resp;
     try {
-      resp = await apiFetch('/routes', { method: 'POST', body: fd });
+      resp = await send();
     } catch (err) {
       console.warn('Add route POST failed', err);
       addrouteSubmit.disabled = false;
+      syncImportMode();
       addrouteError.textContent = 'Could not reach the server.';
       return;
     }
@@ -3206,6 +3240,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     addrouteSubmit.disabled = false;
+    syncImportMode();
     let body = null;
     try { body = await resp.json(); } catch { /* ignore */ }
     addrouteError.textContent = humanizeAddError(resp.status, body);

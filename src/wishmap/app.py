@@ -40,6 +40,7 @@ from wishmap import (
     pins_store,
     public_links,
     ratings,
+    ridewithgps,
     routes_store,
     shared_maps,
     strava,
@@ -75,6 +76,7 @@ from wishmap.models import (
     PublicLinkResponse,
     RouteAddResponse,
     RouteConfig,
+    RouteImportIn,
     RoutePatch,
     RouteRating,
     RouteRatingIn,
@@ -340,10 +342,23 @@ def post_route(
     except ValidationError as e:
         raise _validation_422(e)
 
-    # All validation passed — now persist. Write the GPX, then the DB row;
-    # if the DB write fails, don't leave an orphan GPX behind.
-    user_dir = ctx.user_dir(state.user_id)
-    gpx_abs = user_dir / rel_gpx
+    return _store_web_route(ctx, state, route, text, coords)
+
+
+def _store_web_route(
+    ctx: AppContext,
+    state: UserState,
+    route: RouteConfig,
+    text: str,
+    coords: list[list[float]],
+) -> RouteAddResponse:
+    """Persist a validated web route: its GPX `text`, then its DB row.
+
+    If the DB write fails, don't leave an orphan GPX behind. Then build the
+    route's features from `coords` and swap them into the user's map (a
+    no-op if it isn't built yet).
+    """
+    gpx_abs = ctx.user_dir(state.user_id) / route.gpx
     gpx_abs.parent.mkdir(parents=True, exist_ok=True)
     gpx_abs.write_text(text)
     try:
@@ -352,14 +367,58 @@ def post_route(
         gpx_abs.unlink(missing_ok=True)
         raise
 
-    # Build this route's features from the coordinates parsed above and
-    # swap them into the user's map (a no-op if it isn't built yet).
     route_feature, start_feature = route_features(route, coords)
     state.swap_in_route(route_feature, start_feature)
 
     return RouteAddResponse(
         created=created, route=route_feature, start=start_feature
     )
+
+
+@app.post("/api/routes/import", status_code=201, dependencies=[SameOrigin])
+def import_route(body: RouteImportIn, ctx: Ctx, state: UserStateDep) -> RouteAddResponse:
+    """Add a route fetched from a public Ride with GPS trip or route link.
+
+    The id is derived from the link, so importing the same link again
+    replaces the route (`created` False) instead of duplicating it. A
+    blank name takes the one Ride with GPS has. 422 for a link we can't
+    import (not Ride with GPS, private, missing); 502 when Ride with GPS
+    can't be reached or answers nonsense.
+    """
+    parsed = ridewithgps.parse_url(body.url)
+    if parsed is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Paste a Ride with GPS trip or route link "
+            "(https://ridewithgps.com/trips/… or /routes/…).",
+        )
+    kind, item_id = parsed
+    try:
+        track = ridewithgps.fetch_track(kind, item_id)
+    except (ridewithgps.NotPublicError, ridewithgps.NotFoundError) as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except ridewithgps.RideWithGpsError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    route_id = f"web-rwgps-{kind}-{item_id}"
+    notes = track.url
+    if track.description:
+        notes += "\n\n" + track.description
+    try:
+        route = RouteConfig(
+            id=route_id,
+            name=body.name or track.name[:200] or f"Ride with GPS {kind} {item_id}",
+            sport=body.sport,
+            status=body.status,
+            tags=body.tags,
+            notes=notes[:10_000],
+            gpx=(WEB_ROUTE_GPX_SUBDIR / f"{route_id}.gpx").as_posix(),
+            strava_id=None,
+        )
+    except ValidationError as e:
+        raise _validation_422(e)
+
+    return _store_web_route(ctx, state, route, ridewithgps.to_gpx(track), track.coords)
 
 
 @app.delete("/api/routes/{route_id}", status_code=204, dependencies=[SameOrigin])

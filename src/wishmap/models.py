@@ -389,6 +389,19 @@ class PinIn(_FeatureFieldRules):
     notes: str = Field(default="", max_length=10_000)
 
 
+class RouteImportIn(_FeatureFieldRules):
+    """POST body of /api/routes/import: a route fetched from a link.
+
+    `name` may be left out to take the name the platform has for it.
+    """
+
+    url: str = Field(max_length=2000)
+    name: str | None = Field(default=None, max_length=200)
+    sport: list[str] = Field(max_length=20)
+    status: Status
+    tags: list[str] = Field(default=[], max_length=50)
+
+
 class PublicLinkResponse(BaseModel):
     """GET/POST /api/public-link: the user's public read-only map, if any."""
 
