@@ -17,6 +17,15 @@ user to log in again.
 
 Failed password checks are throttled per username (`LoginThrottle` on the
 app context): after a few misses that name is locked out for a minute.
+
+Scripts authenticate with a personal API token instead (see `api_tokens`):
+`Authorization: Bearer <token>`. Only the endpoints that depend on
+`api_user` (reading and changing pins, routes and ratings) accept one; a
+token on any other endpoint is refused with 403 `session_required`. A
+request carrying a token is authenticated by it alone — its cookies are
+ignored — so it needs no CSRF check: a browser never attaches such a header
+on its own, and another site can't add it without CORS, which wishmap
+doesn't allow. Failed token checks are throttled per client address.
 """
 
 import logging
@@ -27,7 +36,7 @@ from urllib.parse import urlsplit
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
-from wishmap import users, vault
+from wishmap import api_tokens, users, vault
 from wishmap.models import AccountResponse, Credentials, PasswordChange
 from wishmap.state import AppContext
 from wishmap.users import Login, User
@@ -48,8 +57,19 @@ async def get_ctx(request: Request) -> AppContext:
 Ctx = Annotated[AppContext, Depends(get_ctx)]
 
 
+def bearer_token(request: Request) -> str | None:
+    """The token of an `Authorization: Bearer` header, or None without one."""
+    scheme, _, token = request.headers.get("authorization", "").partition(" ")
+    if scheme.lower() != "bearer":
+        return None
+    return token.strip()
+
+
 async def require_same_origin(request: Request) -> None:
     """Reject a cross-origin request to a mutating endpoint (CSRF), 403.
+
+    A request authenticated by an API token alone (no session cookie)
+    carries no ambient credentials, so it passes.
 
     Browsers label every request with `Sec-Fetch-Site`; only `same-origin`
     (and `none`, a user-initiated navigation) pass. Browsers too old to
@@ -57,6 +77,8 @@ async def require_same_origin(request: Request) -> None:
     this host. A request with neither header (curl, scripts) carries no
     ambient browser credentials to abuse, so it is allowed.
     """
+    if bearer_token(request) is not None and SESSION_COOKIE not in request.cookies:
+        return
     fetch_site = request.headers.get("sec-fetch-site")
     if fetch_site is not None:
         if fetch_site not in ("same-origin", "none"):
@@ -75,21 +97,89 @@ SameOrigin = Depends(require_same_origin)
 
 
 def optional_user(request: Request, ctx: Ctx) -> User | None:
-    """The user the request's session cookie belongs to, or None."""
+    """The user the request's session cookie belongs to, or None.
+
+    None for a request carrying an API token: it is authenticated by the
+    token alone (see the module docstring).
+    """
     token = request.cookies.get(SESSION_COOKIE)
-    if not token:
+    if not token or bearer_token(request) is not None:
         return None
     return users.resolve_session(ctx.db_path, token)
 
 
-def current_user(user: Annotated[User | None, Depends(optional_user)]) -> User:
-    """The signed-in user; 401 `not_authenticated` without a valid session."""
+def current_user(
+    request: Request, user: Annotated[User | None, Depends(optional_user)]
+) -> User:
+    """The signed-in user; 401 `not_authenticated` without a valid session,
+    403 `session_required` for a request authenticated by an API token."""
     if user is None:
+        if bearer_token(request) is not None:
+            raise HTTPException(status_code=403, detail="session_required")
         raise HTTPException(status_code=401, detail="not_authenticated")
     return user
 
 
 CurrentUser = Annotated[User, Depends(current_user)]
+
+
+def _client_key(request: Request) -> str:
+    # Behind a reverse proxy this is the proxy unless uvicorn runs with
+    # --proxy-headers; then every client shares one throttle key.
+    return request.client.host if request.client is not None else ""
+
+
+def _resolve_api_token(request: Request, ctx: AppContext, token: str) -> api_tokens.TokenAuth:
+    """`api_tokens.resolve` behind the throttle; 401 `invalid_token` if it fails.
+
+    Raises 429 `too_many_attempts` while the client is locked out, without
+    checking the token. Unlike a login, an attempt isn't reserved up front
+    (`LoginThrottle.begin`): that would turn away a script's parallel
+    requests, and a 256-bit token can't be guessed in a burst anyway.
+    """
+    key = _client_key(request)
+    retry_after = ctx.token_throttle.retry_after(key)
+    if retry_after > 0:
+        raise HTTPException(
+            status_code=429,
+            detail="too_many_attempts",
+            headers={"Retry-After": str(max(1, round(retry_after)))},
+        )
+    auth = api_tokens.resolve(ctx.db_path, token)
+    if auth is None:
+        ctx.token_throttle.record_failure(key)
+        logger.info("Rejected an API token from %s", key or "an unknown client")
+        raise HTTPException(
+            status_code=401,
+            detail="invalid_token",
+            headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
+        )
+    ctx.token_throttle.record_success(key)
+    return auth
+
+
+def api_user(request: Request, ctx: Ctx) -> User:
+    """The user a request acts for, by session or by API token.
+
+    For the pins/routes/ratings endpoints only. A session may do anything;
+    a token needs the `write` scope for anything but GET/HEAD (403
+    `insufficient_scope` otherwise). 401 `invalid_token` for an unknown,
+    revoked or expired token; 401 `not_authenticated` with neither.
+    """
+    token = bearer_token(request)
+    if token is None:
+        return current_user(request, optional_user(request, ctx))
+    auth = _resolve_api_token(request, ctx, token)
+    if request.method not in ("GET", "HEAD") and auth.scope != "write":
+        raise HTTPException(
+            status_code=403,
+            detail="insufficient_scope",
+            headers={"WWW-Authenticate": 'Bearer error="insufficient_scope"'},
+        )
+    return auth.user
+
+
+ApiUser = Annotated[User, Depends(api_user)]
 
 
 def request_vault_key(request: Request, ctx: AppContext, user: User) -> bytes | None:

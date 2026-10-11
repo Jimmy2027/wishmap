@@ -131,6 +131,22 @@ _STATEMENTS: tuple[str, ...] = (
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS api_tokens (
+        -- Personal API tokens for scripts (see `api_tokens.py`); like
+        -- sessions, only the sha256 of the token is stored.
+        id           INTEGER PRIMARY KEY,
+        user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name         TEXT NOT NULL,
+        token_hash   TEXT NOT NULL UNIQUE,
+        scope        TEXT NOT NULL CHECK (scope IN ('read', 'write')),
+        created_at   TEXT NOT NULL,
+        last_used_at TEXT,
+        -- NULL = never expires.
+        expires_at   TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS api_tokens_user_id ON api_tokens(user_id)",
+    """
     CREATE TABLE IF NOT EXISTS shared_maps (
         -- Presence = the user shares their routes with every other account.
         user_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,

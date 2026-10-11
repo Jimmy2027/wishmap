@@ -8,6 +8,7 @@ import uuid
 import zipfile
 from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from pathlib import Path
 from typing import Annotated
 
@@ -31,6 +32,7 @@ from garminconnect import (
 from pydantic import BaseModel, Field, ValidationError
 
 from wishmap import (
+    api_tokens,
     auth,
     db,
     export,
@@ -48,7 +50,7 @@ from wishmap import (
     userdata,
     vault,
 )
-from wishmap.auth import Ctx, CurrentUser, SameOrigin, VaultKey
+from wishmap.auth import ApiUser, Ctx, CurrentUser, SameOrigin, VaultKey
 from wishmap.config import (
     ConfigError,
     load_settings,
@@ -62,6 +64,9 @@ from wishmap.integrations_store import Integration
 from wishmap.models import (
     DEFAULT_GARMIN_ACTIVITY_LIMIT,
     MAX_GARMIN_ACTIVITY_LIMIT,
+    ApiTokenCreated,
+    ApiTokenIn,
+    ApiTokenInfo,
     ConfigResponse,
     Feature,
     FeatureCollection,
@@ -178,6 +183,15 @@ async def _get_user_state(ctx: Ctx, user: CurrentUser) -> UserState:
 UserStateDep = Annotated[UserState, Depends(_get_user_state)]
 
 
+async def _get_api_user_state(ctx: Ctx, user: ApiUser) -> UserState:
+    return ctx.registry.get(user.id)
+
+
+# For the endpoints a personal API token may use too (pins, routes,
+# ratings; see `auth.api_user`). Everything else takes `UserStateDep`.
+ApiStateDep = Annotated[UserState, Depends(_get_api_user_state)]
+
+
 def _loaded(ctx: AppContext, state: UserState) -> UserData:
     """Return the user's built map data (building it if cold), or 500."""
     try:
@@ -244,12 +258,12 @@ def get_me(request: Request, ctx: Ctx, user: CurrentUser) -> MeResponse:
 # Data GETs are `def` (threadpool): on a cold state the first one blocks on
 # the full GPX parse, which must not stall the event loop.
 @app.get("/api/pins")
-def get_pins(ctx: Ctx, state: UserStateDep) -> FeatureCollection:
+def get_pins(ctx: Ctx, state: ApiStateDep) -> FeatureCollection:
     return _loaded(ctx, state).pins_fc
 
 
 @app.get("/api/routes")
-def get_routes(ctx: Ctx, state: UserStateDep) -> FeatureCollection:
+def get_routes(ctx: Ctx, state: ApiStateDep) -> FeatureCollection:
     return _loaded(ctx, state).routes_fc
 
 
@@ -281,7 +295,7 @@ def _parse_tags(raw: str) -> list[str]:
 @app.post("/api/routes", status_code=201, dependencies=[SameOrigin])
 def post_route(
     ctx: Ctx,
-    state: UserStateDep,
+    state: ApiStateDep,
     gpx_file: UploadFile = File(...),
     strava_url: str = Form(""),
     name: str = Form(...),
@@ -376,7 +390,7 @@ def _store_web_route(
 
 
 @app.post("/api/routes/import", status_code=201, dependencies=[SameOrigin])
-def import_route(body: RouteImportIn, ctx: Ctx, state: UserStateDep) -> RouteAddResponse:
+def import_route(body: RouteImportIn, ctx: Ctx, state: ApiStateDep) -> RouteAddResponse:
     """Add a route fetched from a public Ride with GPS trip or route link.
 
     The id is derived from the link, so importing the same link again
@@ -422,7 +436,7 @@ def import_route(body: RouteImportIn, ctx: Ctx, state: UserStateDep) -> RouteAdd
 
 
 @app.delete("/api/routes/{route_id}", status_code=204, dependencies=[SameOrigin])
-def delete_route(route_id: str, ctx: Ctx, state: UserStateDep) -> Response:
+def delete_route(route_id: str, ctx: Ctx, state: ApiStateDep) -> Response:
     """Delete one of the user's routes + its GPX file, then swap it out of the map.
 
     Any route the user owns can go; an id they don't own 404s (whether or
@@ -444,7 +458,7 @@ def delete_route(route_id: str, ctx: Ctx, state: UserStateDep) -> Response:
 
 @app.patch("/api/routes/{route_id}", dependencies=[SameOrigin])
 def patch_route(
-    route_id: str, patch: RoutePatch, ctx: Ctx, state: UserStateDep
+    route_id: str, patch: RoutePatch, ctx: Ctx, state: ApiStateDep
 ) -> FeatureProperties:
     """Edit one of the user's routes (name, sport, status, tags, notes).
 
@@ -476,7 +490,7 @@ def patch_route(
 
 
 @app.post("/api/pins", status_code=201, dependencies=[SameOrigin])
-def post_pin(body: PinIn, ctx: Ctx, state: UserStateDep) -> Feature:
+def post_pin(body: PinIn, ctx: Ctx, state: ApiStateDep) -> Feature:
     """Add a pin; returns its feature so the web UI renders it without a refetch."""
     pin = PinConfig(id=f"pin-{uuid.uuid4().hex}", **body.model_dump())
     pins_store.insert(ctx.db_path, state.user_id, pin)
@@ -485,7 +499,7 @@ def post_pin(body: PinIn, ctx: Ctx, state: UserStateDep) -> Feature:
 
 
 @app.patch("/api/pins/{pin_id}", dependencies=[SameOrigin])
-def patch_pin(pin_id: str, patch: PinPatch, ctx: Ctx, state: UserStateDep) -> Feature:
+def patch_pin(pin_id: str, patch: PinPatch, ctx: Ctx, state: ApiStateDep) -> Feature:
     """Edit one of the user's pins (fields left out keep their value); 404
     for an id the user doesn't own."""
     try:
@@ -501,7 +515,7 @@ def patch_pin(pin_id: str, patch: PinPatch, ctx: Ctx, state: UserStateDep) -> Fe
 
 
 @app.delete("/api/pins/{pin_id}", status_code=204, dependencies=[SameOrigin])
-def delete_pin(pin_id: str, ctx: Ctx, state: UserStateDep) -> Response:
+def delete_pin(pin_id: str, ctx: Ctx, state: ApiStateDep) -> Response:
     """Delete one of the user's pins; 404 for an id the user doesn't own."""
     if not pins_store.delete(ctx.db_path, state.user_id, pin_id):
         raise HTTPException(status_code=404, detail="unknown pin_id")
@@ -523,13 +537,13 @@ def _refresh_pin(ctx: AppContext, state: UserState, pin_id: str) -> None:
 # Sync handlers — FastAPI dispatches `def` handlers to a threadpool, so the
 # blocking sqlite3 calls don't stall the event loop.
 @app.get("/api/ratings")
-def get_ratings(ctx: Ctx, state: UserStateDep) -> dict[str, RouteRating]:
+def get_ratings(ctx: Ctx, state: ApiStateDep) -> dict[str, RouteRating]:
     return _ratings(ctx, state.user_id)
 
 
 @app.put("/api/ratings/{route_id}", dependencies=[SameOrigin])
 def put_rating(
-    route_id: str, patch: RouteRatingIn, ctx: Ctx, state: UserStateDep
+    route_id: str, patch: RouteRatingIn, ctx: Ctx, state: ApiStateDep
 ) -> RouteRating:
     # Only the user's own routes are ratable; anything else 404s.
     if routes_store.get(ctx.db_path, state.user_id, route_id) is None:
@@ -538,6 +552,58 @@ def put_rating(
         ctx.db_path, state.user_id, route_id, patch.model_dump(exclude_unset=True)
     )
     return RouteRating(**row)
+
+
+# ── Personal API tokens ───────────────────────────────────────────────
+# Managed from a browser session only: a token can neither list nor mint
+# tokens (see `api_tokens`).
+
+
+def _token_info(token: api_tokens.ApiToken) -> ApiTokenInfo:
+    return ApiTokenInfo(
+        id=token.id,
+        name=token.name,
+        scope=token.scope,
+        created_at=token.created_at,
+        last_used_at=token.last_used_at,
+        expires_at=token.expires_at,
+    )
+
+
+@app.get("/api/tokens")
+def get_api_tokens(ctx: Ctx, user: CurrentUser) -> list[ApiTokenInfo]:
+    return [_token_info(t) for t in api_tokens.list_tokens(ctx.db_path, user.id)]
+
+
+@app.post("/api/tokens", status_code=201, dependencies=[SameOrigin])
+def post_api_token(body: ApiTokenIn, ctx: Ctx, user: CurrentUser) -> ApiTokenCreated:
+    """Create a token; the response is the only place it appears in the clear.
+
+    422 once the user has `api_tokens.MAX_TOKENS_PER_USER` tokens.
+    """
+    lifetime = None if body.expires_days is None else timedelta(days=body.expires_days)
+    try:
+        secret, token = api_tokens.create(
+            ctx.db_path, user.id, body.name, body.scope, lifetime
+        )
+    except api_tokens.TooManyTokensError:
+        raise HTTPException(
+            status_code=422,
+            detail=f"You can have at most {api_tokens.MAX_TOKENS_PER_USER} "
+            "API tokens; revoke one first.",
+        )
+    logger.info("User %d created %s API token %d", user.id, token.scope, token.id)
+    return ApiTokenCreated(**_token_info(token).model_dump(), token=secret)
+
+
+@app.delete("/api/tokens/{token_id}", status_code=204, dependencies=[SameOrigin])
+def delete_api_token(token_id: int, ctx: Ctx, user: CurrentUser) -> Response:
+    """Revoke one of the user's tokens (it stops working at once); 404 for
+    an id the user doesn't own."""
+    if not api_tokens.revoke(ctx.db_path, user.id, token_id):
+        raise HTTPException(status_code=404, detail="unknown token_id")
+    logger.info("User %d revoked API token %d", user.id, token_id)
+    return Response(status_code=204)
 
 
 # ── Public read-only link ─────────────────────────────────────────────

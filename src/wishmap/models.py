@@ -428,6 +428,44 @@ class SharedUser(BaseModel):
     username: str
 
 
+class ApiTokenIn(BaseModel):
+    """POST body of /api/tokens: a new personal API token.
+
+    `read` may GET the pins, routes and ratings; `write` may also change
+    them. `expires_days` None = the token never expires.
+    """
+
+    name: str = Field(min_length=1, max_length=100)
+    scope: Literal["read", "write"]
+    expires_days: int | None = Field(default=None, ge=1, le=3650)
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be blank")
+        return v
+
+
+class ApiTokenInfo(BaseModel):
+    """GET /api/tokens: one of the user's tokens (never the secret)."""
+
+    id: int
+    name: str
+    scope: Literal["read", "write"]
+    created_at: str
+    last_used_at: str | None
+    # None = never expires.
+    expires_at: str | None
+
+
+class ApiTokenCreated(ApiTokenInfo):
+    """POST /api/tokens: the new token — the only time it is shown."""
+
+    token: str
+
+
 class RouteRatingIn(BaseModel):
     """PUT body. Any subset of axes may be sent.
 

@@ -431,6 +431,8 @@ class AppContext:
     data_root: Path
     db_path: Path
     login_throttle: LoginThrottle = field(default_factory=LoginThrottle)
+    # Failed API token checks, keyed per client address (see `auth`).
+    token_throttle: LoginThrottle = field(default_factory=LoginThrottle)
 
     def user_dir(self, user_id: int) -> Path:
         """The user's file tree; their routes' `gpx` paths are relative to it."""

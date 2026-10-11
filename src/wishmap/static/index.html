@@ -542,6 +542,36 @@
     background: var(--stone-50);
     color: var(--stone-700);
   }
+  .settings-modal select {
+    width: 100%;
+    margin-top: 5px;
+    padding: 10px 12px;
+    border: 1px solid var(--stone-300);
+    border-radius: 4px;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
+    background: #fff;
+    color: var(--stone-900);
+    box-sizing: border-box;
+  }
+  .settings-modal .token-list { list-style: none; margin: 0 0 12px; padding: 0; }
+  .settings-modal .token-list:empty { display: none; }
+  .settings-modal .token-list li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--stone-200);
+    font-size: 13px;
+  }
+  .settings-modal .token-list .token-meta { display: block; font-size: 11px; color: var(--stone-500); }
+  .settings-modal .token-list .token-expired { color: var(--trail-red); }
+  .settings-modal .token-list button { flex-shrink: 0; }
+  .settings-modal #token-new-label { margin-top: 12px; }
 
   /* ── Account row (signed-in user + log out) ── */
   .account-section {
@@ -1253,7 +1283,7 @@
   </div>
   <div class="account-section">
     <span class="account-name" id="account-name"></span>
-    <button id="settings-button" type="button" title="Account, Garmin, Strava and public link settings">⚙ Settings</button>
+    <button id="settings-button" type="button" title="Account, Garmin, Strava, public link and API token settings">⚙ Settings</button>
   </div>
   </div>
 </div>
@@ -1398,6 +1428,43 @@
         <button type="button" id="link-revoke" class="danger" hidden>Revoke</button>
       </div>
       <div class="settings-status" id="link-status" role="status"></div>
+    </section>
+
+    <section aria-labelledby="settings-tokens-title">
+      <h4 id="settings-tokens-title">API tokens</h4>
+      <p>Let scripts and agents read or change your pins, routes and ratings, sending <code>Authorization: Bearer &lt;token&gt;</code>. A token never reaches your account, Garmin login or these settings.</p>
+      <ul class="token-list" id="token-list"></ul>
+      <form id="token-form">
+        <label>Name
+          <input id="token-name" type="text" maxlength="100" autocomplete="off" placeholder="bulk import" required />
+        </label>
+        <div class="settings-row">
+          <label>Access
+            <select id="token-scope">
+              <option value="read">Read only</option>
+              <option value="write">Read and write</option>
+            </select>
+          </label>
+          <label>Expires
+            <select id="token-expiry">
+              <option value="30">in 30 days</option>
+              <option value="90" selected>in 90 days</option>
+              <option value="365">in a year</option>
+              <option value="">never</option>
+            </select>
+          </label>
+        </div>
+        <div class="prompt-actions">
+          <button type="submit" id="token-submit">Create token</button>
+        </div>
+      </form>
+      <label id="token-new-label" hidden>New token <span class="auth-hint">shown only now: copy it</span>
+        <input id="token-new" type="text" readonly />
+      </label>
+      <div class="prompt-actions" id="token-new-actions" hidden>
+        <button type="button" id="token-copy">Copy</button>
+      </div>
+      <div class="settings-status" id="token-status" role="status"></div>
     </section>
   </div>
 </div>
@@ -3697,7 +3764,7 @@ document.addEventListener('DOMContentLoaded', function () {
   // ── Settings modal ──
   // Account (change password, log out), Garmin (account, what to sync,
   // forget the saved login), the Strava export upload, sharing with other
-  // users and the public link.
+  // users, the public link and personal API tokens.
   // Each section talks to its endpoint on its own; nothing here is cached
   // across opens.
   const settingsOverlay = document.getElementById('settings-overlay');
@@ -3730,6 +3797,16 @@ document.addEventListener('DOMContentLoaded', function () {
   const linkButtons = [linkCreate, linkCopy, linkRotate, linkRevoke];
   const shareEnabled = document.getElementById('settings-share-enabled');
   const shareStatus = document.getElementById('settings-share-status');
+  const tokenList = document.getElementById('token-list');
+  const tokenForm = document.getElementById('token-form');
+  const tokenName = document.getElementById('token-name');
+  const tokenScope = document.getElementById('token-scope');
+  const tokenExpiry = document.getElementById('token-expiry');
+  const tokenSubmit = document.getElementById('token-submit');
+  const tokenNewLabel = document.getElementById('token-new-label');
+  const tokenNew = document.getElementById('token-new');
+  const tokenNewActions = document.getElementById('token-new-actions');
+  const tokenStatus = document.getElementById('token-status');
   let currentAccount = null;
 
   function setStatus(el, message, isError) {
@@ -3766,7 +3843,12 @@ document.addEventListener('DOMContentLoaded', function () {
     setStatus(linkStatus, '');
     shareEnabled.disabled = true;
     setStatus(shareStatus, '');
+    tokenForm.reset();
+    hideNewToken();
+    tokenList.replaceChildren();
+    setStatus(tokenStatus, '');
     settingsOverlay.classList.add('visible');
+    loadApiTokens();
     try {
       const [settings, me] = await Promise.all([loadGarminSettings(), fetchJson('/me')]);
       renderGarminSettings(settings);
@@ -3868,9 +3950,126 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   });
 
+  // ── API tokens ──
+  // GET /api/tokens lists them (never the secret), POST creates one and
+  // answers it in the clear — the only time it is shown — and DELETE
+  // /api/tokens/<id> revokes one.
+  function formatDate(iso) {
+    return new Date(iso).toLocaleDateString();
+  }
+
+  function renderApiTokens(tokens) {
+    const now = Date.now();
+    tokenList.replaceChildren(...tokens.map((t) => {
+      const li = document.createElement('li');
+      const info = document.createElement('span');
+      const name = document.createElement('strong');
+      name.textContent = t.name;
+      const meta = document.createElement('span');
+      meta.className = 'token-meta';
+      const expired = t.expires_at && Date.parse(t.expires_at) <= now;
+      meta.textContent = [
+        t.scope === 'write' ? 'read and write' : 'read only',
+        `created ${formatDate(t.created_at)}`,
+        t.last_used_at ? `last used ${formatDate(t.last_used_at)}` : 'never used',
+        expired ? 'expired' : t.expires_at ? `expires ${formatDate(t.expires_at)}` : 'never expires',
+      ].join(' · ');
+      meta.classList.toggle('token-expired', Boolean(expired));
+      info.append(name, meta);
+      const revoke = document.createElement('button');
+      revoke.type = 'button';
+      revoke.className = 'danger';
+      revoke.textContent = 'Revoke';
+      revoke.addEventListener('click', () => revokeApiToken(t, revoke));
+      li.append(info, revoke);
+      return li;
+    }));
+  }
+
+  async function loadApiTokens() {
+    try {
+      renderApiTokens(await fetchJson('/tokens'));
+    } catch (e) {
+      console.warn('Loading API tokens failed', e);
+      setStatus(tokenStatus, 'Could not load the API tokens.', true);
+    }
+  }
+
+  function hideNewToken() {
+    tokenNew.value = '';
+    tokenNewLabel.hidden = true;
+    tokenNewActions.hidden = true;
+  }
+
+  async function revokeApiToken(token, button) {
+    if (!window.confirm(`Revoke the token "${token.name}"? Scripts using it stop working at once.`)) return;
+    button.disabled = true;
+    setStatus(tokenStatus, '');
+    try {
+      const resp = await apiFetch(`/tokens/${token.id}`, { method: 'DELETE' });
+      if (resp.ok || resp.status === 404) {
+        setStatus(tokenStatus, `Token "${token.name}" revoked.`);
+        await loadApiTokens();
+        return;
+      }
+      if (resp.status !== 401) {
+        const body = await resp.json().catch(() => null);
+        setStatus(tokenStatus, errorDetail(body, `Could not revoke the token (HTTP ${resp.status}).`), true);
+      }
+    } catch (e) {
+      console.warn('Revoking an API token failed', e);
+      setStatus(tokenStatus, 'Could not reach the server.', true);
+    }
+    button.disabled = false;
+  }
+
+  tokenForm.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    tokenSubmit.disabled = true;
+    hideNewToken();
+    setStatus(tokenStatus, '');
+    try {
+      const resp = await apiSendJson('POST', '/tokens', {
+        name: tokenName.value,
+        scope: tokenScope.value,
+        expires_days: tokenExpiry.value ? Number(tokenExpiry.value) : null,
+      });
+      const body = await resp.json().catch(() => null);
+      if (resp.ok && body && body.token) {
+        tokenForm.reset();
+        tokenNew.value = body.token;
+        tokenNewLabel.hidden = false;
+        tokenNewActions.hidden = false;
+        tokenNew.focus();
+        tokenNew.select();
+        setStatus(tokenStatus, 'Token created. Copy it now: it is not shown again.');
+        await loadApiTokens();
+      } else if (resp.status !== 401) {
+        setStatus(tokenStatus, errorDetail(body, `Could not create the token (HTTP ${resp.status}).`), true);
+      }
+    } catch (e) {
+      console.warn('Creating an API token failed', e);
+      setStatus(tokenStatus, 'Could not reach the server.', true);
+    }
+    tokenSubmit.disabled = false;
+  });
+
+  document.getElementById('token-copy').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(tokenNew.value);
+      setStatus(tokenStatus, 'Copied to the clipboard.');
+    } catch {
+      tokenNew.focus();
+      tokenNew.select();
+      setStatus(tokenStatus, 'Press Ctrl+C (⌘C) to copy the selected token.');
+    }
+  });
+
   function hideSettingsModal() {
     settingsOverlay.classList.remove('visible');
     passwordForm.reset();
+    // The secret is shown once, not again on the next open.
+    hideNewToken();
   }
 
   document.getElementById('settings-button').addEventListener('click', showSettingsModal);

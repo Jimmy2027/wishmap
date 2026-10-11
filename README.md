@@ -224,6 +224,51 @@ who may see them.
   or rateable. The selection is remembered in the browser.
 - Public links and static exports never include other users' routes.
 
+## API tokens (scripts and agents)
+
+**⚙ Settings → API tokens** creates personal tokens that let a script or
+agent use your map without a browser — e.g. to bulk-import GPX files
+through the server (so they show up at once) instead of writing to `data/`.
+Give each token a name, an access level and an expiry (30/90/365 days or
+never). The token is shown once, when it is created; the server keeps only
+its SHA-256. The list shows when each was created and last used; **Revoke**
+stops a token at once.
+
+Send it as `Authorization: Bearer <token>`:
+
+```bash
+TOKEN=wm_…
+# all routes / pins / ratings (any token)
+curl -H "Authorization: Bearer $TOKEN" https://wishmap.example/api/routes
+# add a route from a GPX file (needs "Read and write")
+curl -H "Authorization: Bearer $TOKEN" \
+  -F gpx_file=@trail.gpx -F name="Trail" -F sport=hiking -F status=idea \
+  -F tags="alps, 2026" https://wishmap.example/api/routes
+# import a public Ride with GPS trip or route
+curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"url": "https://ridewithgps.com/routes/123", "sport": ["cycling"], "status": "planned"}' \
+  https://wishmap.example/api/routes/import
+```
+
+- **Read only** tokens may `GET /api/pins`, `/api/routes` and
+  `/api/ratings`. **Read and write** tokens may also add, edit and delete
+  routes (`POST /api/routes`, `POST /api/routes/import`,
+  `PATCH`/`DELETE /api/routes/<id>`), pins (`POST /api/pins`,
+  `PATCH`/`DELETE /api/pins/<id>`) and ratings (`PUT /api/ratings/<id>`).
+- Nothing else accepts a token: account and password, tokens themselves,
+  Garmin/Strava, sync, sharing and the public link answer
+  `403 session_required`. A read-only token writing gets
+  `403 insufficient_scope`; an unknown, revoked or expired token
+  `401 invalid_token`.
+- A request with a token is authenticated by it alone (cookies are
+  ignored), so it needs no CSRF check.
+- After 5 failed token checks within 15 minutes, the client address is
+  locked out of token auth for a minute (`429`, with `Retry-After`).
+  Behind a reverse proxy this needs `--proxy-headers` (see
+  [Deployment](#deployment)), or all clients share one lockout.
+- Tokens survive a password change; revoke them separately if one may
+  have leaked.
+
 ## Static export
 
 ```bash
@@ -307,6 +352,9 @@ What that protects against, and what not:
   defence against the host.
 - **A stolen browser cookie jar** holds both the session and the vault key
   (until the session expires or the password changes).
+- **A leaked API token** lets its holder read (and, with write access,
+  change) your pins, routes and ratings until it expires or you revoke it —
+  but never your account, settings or Garmin login.
 - **Plain HTTP** exposes cookies and passwords to the network. Serve over
   HTTPS with `secure_cookies = true`.
 - **Map data is not encrypted**: pins, routes, notes, ratings, GPX files and
@@ -400,8 +448,9 @@ Everything lives under `data_dir`:
 
 ```
 data/
-  wishmap.db                 accounts, sessions, pins, routes, ratings,
-                             integrations, public links, sharing
+  wishmap.db                 accounts, sessions, API tokens, pins,
+                             routes, ratings, integrations, public
+                             links, sharing
                              (SQLite, WAL)
   users/<account id>/
     gpx/web/…                routes added in the web UI
