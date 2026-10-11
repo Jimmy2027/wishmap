@@ -1106,7 +1106,9 @@
     line-height: 1.5;
     border-top: 1px solid var(--stone-200);
     padding-top: 8px;
+    overflow-wrap: anywhere;
   }
+  .popup-inner .popup-notes a { color: var(--trail-blue); }
 
   /* ── Rating stars ── */
   .popup-rating-rows {
@@ -2004,6 +2006,27 @@ document.addEventListener('DOMContentLoaded', function () {
     }[c]));
   }
 
+  // Escape notes and turn the http(s)/www. URLs in them into links. Only
+  // whole URLs matched here become hrefs (scheme forced to http(s)), and
+  // every piece still goes through esc(), so no other markup gets in.
+  // Trailing punctuation (a sentence's full stop, a closing paren) stays text.
+  const URL_RE = /\b(?:https?:\/\/|www\.)[^\s<>"']+/gi;
+  function linkify(s) {
+    const text = String(s == null ? '' : s);
+    let out = '';
+    let last = 0;
+    for (const m of text.matchAll(URL_RE)) {
+      let url = m[0];
+      const trail = url.match(/[.,;:!?)\]}]+$/);
+      if (trail) url = url.slice(0, -trail[0].length);
+      const href = /^www\./i.test(url) ? `https://${url}` : url;
+      out += esc(text.slice(last, m.index));
+      out += `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>`;
+      last = m.index + url.length;
+    }
+    return out + esc(text.slice(last));
+  }
+
   function renderStarRow(label, axis, value) {
     const v = value == null ? 0 : value;
     let stars = '';
@@ -2122,7 +2145,7 @@ document.addEventListener('DOMContentLoaded', function () {
       : '';
 
     const notes = props.notes
-      ? `<div class="popup-notes">${esc(props.notes)}</div>`
+      ? `<div class="popup-notes">${linkify(props.notes)}</div>`
       : '';
 
     // Strip `-start` suffix from route_start ids to recover the underlying route id.
