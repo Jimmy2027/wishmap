@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tests.helpers import ctx, user_id
-from wishmap import gpx, ridewithgps
+from wishmap import gpx, remote_track, ridewithgps
 
 TRIP = {
     "id": 100124261,
@@ -103,16 +103,17 @@ def test_parse_track_accepts_wrapped_answer() -> None:
 
 
 def test_parse_track_without_points_raises() -> None:
-    with pytest.raises(ridewithgps.RideWithGpsError):
+    with pytest.raises(remote_track.RemoteTrackError):
         ridewithgps.parse_track("trip", "1", {"name": "x", "track_points": []})
-    with pytest.raises(ridewithgps.RideWithGpsError):
+    with pytest.raises(remote_track.RemoteTrackError):
         ridewithgps.parse_track("trip", "1", ["not", "a", "dict"])
 
 
 def test_to_gpx_round_trips_and_escapes_name() -> None:
     track = ridewithgps.parse_track("trip", "1", TRIP)
-    text = ridewithgps.to_gpx(track)
+    text = remote_track.to_gpx(track, creator="wishmap & co")
     assert "Alpine Bike 1 &lt;Route&gt;" in text
+    assert 'creator="wishmap &amp; co"' in text
     assert gpx.parse_gpx_data(text) == track.coords
 
 
@@ -124,7 +125,7 @@ def test_fetch_track_only_asks_the_fixed_host(downloads: list[str]) -> None:
 
 
 def test_redirect_off_site_refused() -> None:
-    handler = ridewithgps._SameSiteRedirects()
+    handler = remote_track.SameSiteRedirects(ridewithgps.DOMAIN, ridewithgps.SITE)
     req = urllib.request.Request("https://ridewithgps.com/trips/1.json")
 
     def redirect(url: str) -> urllib.request.Request | None:
@@ -132,10 +133,12 @@ def test_redirect_off_site_refused() -> None:
             req, io.BytesIO(), 302, "Found", HTTPMessage(), url
         )
 
-    with pytest.raises(ridewithgps.RideWithGpsError):
+    with pytest.raises(remote_track.RemoteTrackError):
         redirect("https://evil.example/x")
-    with pytest.raises(ridewithgps.RideWithGpsError):
+    with pytest.raises(remote_track.RemoteTrackError):
         redirect("http://ridewithgps.com/x")
+    with pytest.raises(remote_track.RemoteTrackError):
+        redirect("https://ridewithgps.com.evil.example/x")
     assert redirect("https://www.ridewithgps.com/trips/1.json") is not None
 
 
@@ -195,9 +198,9 @@ def test_import_rejects_other_links(
 @pytest.mark.parametrize(
     ("exc", "status"),
     [
-        (ridewithgps.NotPublicError("private"), 422),
-        (ridewithgps.NotFoundError("missing"), 422),
-        (ridewithgps.RideWithGpsError("down"), 502),
+        (remote_track.NotPublicError("private"), 422),
+        (remote_track.NotFoundError("missing"), 422),
+        (remote_track.RemoteTrackError("down"), 502),
     ],
 )
 def test_import_upstream_errors_write_nothing(

@@ -1500,11 +1500,11 @@
 <div class="addroute-overlay" id="addroute-overlay" role="dialog" aria-modal="true" aria-labelledby="addroute-title">
   <div class="addroute-modal">
     <h3 id="addroute-title">Add a route</h3>
-    <p id="addroute-intro">Paste a public Ride with GPS trip or route link to import it directly, or attach a <code>.gpx</code> (e.g. a Strava route's export) with an optional link to it.</p>
+    <p id="addroute-intro">Paste a public Ride with GPS trip/route or Komoot tour link to import it directly, or attach a <code>.gpx</code> (e.g. a Strava route's export) with an optional link to it.</p>
     <p class="ar-note" id="ar-sync-note" hidden>This route comes from Garmin: the next sync overwrites changes made here.</p>
     <form id="addroute-form">
       <label id="ar-url-label">Link
-        <input id="ar-url" type="url" placeholder="https://ridewithgps.com/trips/… or https://www.strava.com/routes/…" />
+        <input id="ar-url" type="url" placeholder="https://ridewithgps.com/trips/…, https://www.komoot.com/tour/… or https://www.strava.com/routes/…" />
       </label>
       <label id="ar-gpx-label">GPX file
         <input id="ar-gpx" type="file" accept=".gpx,application/gpx+xml,application/xml,text/xml" required />
@@ -3032,21 +3032,34 @@ document.addEventListener('DOMContentLoaded', function () {
   // The id of the route the modal is editing; null while it adds one.
   let editingRouteId = null;
 
-  // A Ride with GPS trip/route link is imported server-side
-  // (POST /routes/import), so it needs no GPX and may leave the name blank.
-  const RWGPS_URL_RE = /^https?:\/\/(www\.)?ridewithgps\.com\/(trips|routes)\/\d+/i;
+  // A Ride with GPS or Komoot link is imported server-side
+  // (POST /routes/import, which picks the platform from the link), so it
+  // needs no GPX and may leave the name blank. Mirrors the server's parse_url()s.
+  const IMPORT_LINKS = [
+    { site: 'Ride with GPS', re: /^https?:\/\/(www\.)?ridewithgps\.com\/(trips|routes)\/\d+/i },
+    { site: 'Komoot', re: /^https?:\/\/(www\.)?komoot\.(com|de)(\/[a-z]{2}(-[a-z]{2})?)?\/(tour|smarttour)\/\d+/i },
+  ];
+
+  // The platform the link in the modal is imported from, or null.
+  function importSite() {
+    if (editingRouteId !== null) return null;
+    const url = arUrl.value.trim();
+    const hit = IMPORT_LINKS.find((p) => p.re.test(url));
+    return hit ? hit.site : null;
+  }
 
   function importingFromLink() {
-    return editingRouteId === null && RWGPS_URL_RE.test(arUrl.value.trim());
+    return importSite() !== null;
   }
 
   function syncImportMode() {
     const editing = editingRouteId !== null;
-    const importing = importingFromLink();
+    const site = importSite();
+    const importing = site !== null;
     arGpxLabel.hidden = editing || importing;
     arGpx.required = !editing && !importing;
     arName.required = !importing;
-    arName.placeholder = importing ? 'Leave blank to use the Ride with GPS name' : '';
+    arName.placeholder = importing ? `Leave blank to use the ${site} name` : '';
     if (!editing) addrouteSubmit.textContent = importing ? 'Import route' : 'Add route';
   }
 

@@ -100,10 +100,15 @@ back to `Origin`), so another site can't act through a logged-in browser.
 - **＋ Add route**: paste a Strava route link (optional) and upload its
   exported GPX (up to 10 MB), then set name, sport, status and tags.
   A public **Ride with GPS** trip or route link
-  (`https://ridewithgps.com/trips/…` or `/routes/…`) needs no file: the
-  server downloads the track and takes its name (unless you give one) and
+  (`https://ridewithgps.com/trips/…` or `/routes/…`) or **Komoot** tour
+  link (`https://www.komoot.com/tour/…` or `/smarttour/…`) needs no file:
+  the server picks the platform from the link, downloads the track and
+  takes its name (unless you give one) and, for Ride with GPS, its
   description. Importing the same link again replaces the route. Private
-  items can't be fetched this way — download their GPX and upload it.
+  items can't be fetched this way (except a Komoot tour's share link with
+  `share_token`) — download their GPX and upload it. Both platforms are
+  read through the undocumented JSON their own websites use, so either may
+  break without notice.
 - **＋ Add pin**: click the button, then the map where the pin goes.
 - **Edit / delete**: the ✎ Edit and ✕ buttons in a route's or pin's popup.
   A route's GPX can't be edited — delete the route and add it again.
@@ -244,7 +249,7 @@ curl -H "Authorization: Bearer $TOKEN" https://wishmap.example/api/routes
 curl -H "Authorization: Bearer $TOKEN" \
   -F gpx_file=@trail.gpx -F name="Trail" -F sport=hiking -F status=idea \
   -F tags="alps, 2026" https://wishmap.example/api/routes
-# import a public Ride with GPS trip or route
+# import a public Ride with GPS trip/route or Komoot tour (platform picked from the link)
 curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"url": "https://ridewithgps.com/routes/123", "sport": ["cycling"], "status": "planned"}' \
   https://wishmap.example/api/routes/import

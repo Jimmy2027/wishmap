@@ -39,10 +39,11 @@ from wishmap import (
     garmin,
     gpx,
     integrations_store,
+    link_import,
     pins_store,
     public_links,
     ratings,
-    ridewithgps,
+    remote_track,
     routes_store,
     shared_maps,
     strava,
@@ -391,37 +392,36 @@ def _store_web_route(
 
 @app.post("/api/routes/import", status_code=201, dependencies=[SameOrigin])
 def import_route(body: RouteImportIn, ctx: Ctx, state: ApiStateDep) -> RouteAddResponse:
-    """Add a route fetched from a public Ride with GPS trip or route link.
+    """Add a route fetched from a public link: Ride with GPS or Komoot.
 
-    The id is derived from the link, so importing the same link again
-    replaces the route (`created` False) instead of duplicating it. A
-    blank name takes the one Ride with GPS has. 422 for a link we can't
-    import (not Ride with GPS, private, missing); 502 when Ride with GPS
-    can't be reached or answers nonsense.
+    The platform is picked from the link (`link_import.resolve`). The id
+    is derived from the link, so importing the same link again replaces
+    the route (`created` False) instead of duplicating it. A blank name
+    takes the one the platform has. 422 for a link we can't import (no
+    supported platform, private, missing); 502 when the platform can't be
+    reached or answers nonsense.
     """
-    parsed = ridewithgps.parse_url(body.url)
-    if parsed is None:
+    link = link_import.resolve(body.url)
+    if link is None:
         raise HTTPException(
             status_code=422,
-            detail="Paste a Ride with GPS trip or route link "
-            "(https://ridewithgps.com/trips/… or /routes/…).",
+            detail=f"Paste a link to {link_import.SUPPORTED}.",
         )
-    kind, item_id = parsed
     try:
-        track = ridewithgps.fetch_track(kind, item_id)
-    except (ridewithgps.NotPublicError, ridewithgps.NotFoundError) as e:
+        track = link.fetch()
+    except (remote_track.NotPublicError, remote_track.NotFoundError) as e:
         raise HTTPException(status_code=422, detail=str(e))
-    except ridewithgps.RideWithGpsError as e:
+    except remote_track.RemoteTrackError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
-    route_id = f"web-rwgps-{kind}-{item_id}"
+    route_id = link.route_id
     notes = track.url
     if track.description:
         notes += "\n\n" + track.description
     try:
         route = RouteConfig(
             id=route_id,
-            name=body.name or track.name[:200] or f"Ride with GPS {kind} {item_id}",
+            name=body.name or track.name[:200] or link.fallback_name,
             sport=body.sport,
             status=body.status,
             tags=body.tags,
@@ -432,7 +432,7 @@ def import_route(body: RouteImportIn, ctx: Ctx, state: ApiStateDep) -> RouteAddR
     except ValidationError as e:
         raise _validation_422(e)
 
-    return _store_web_route(ctx, state, route, ridewithgps.to_gpx(track), track.coords)
+    return _store_web_route(ctx, state, route, link.to_gpx(track), track.coords)
 
 
 @app.delete("/api/routes/{route_id}", status_code=204, dependencies=[SameOrigin])
