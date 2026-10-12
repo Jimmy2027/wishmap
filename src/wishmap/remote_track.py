@@ -6,6 +6,7 @@ that only follows redirects within the platform's own domain, and the
 GPX serialisation of a track.
 """
 
+import importlib.metadata
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -17,6 +18,22 @@ from xml.sax.saxutils import escape, quoteattr
 # A long trip is big: a 700 km, 8-day Ride with GPS trip is ~20 MB of JSON.
 MAX_JSON_BYTES = 64 * 1024 * 1024
 TIMEOUT_S = 60
+# Upstream's Retry-After on a 429/503: used when it sends none (or a date),
+# and capped so a bogus value can't silence a platform for days.
+DEFAULT_RETRY_AFTER_S = 60.0
+MAX_RETRY_AFTER_S = 15 * 60.0
+
+
+def _version() -> str:
+    try:
+        return importlib.metadata.version("wishmap")
+    except importlib.metadata.PackageNotFoundError:
+        return "dev"
+
+
+# Sent with every outgoing request, so the platforms can tell who is asking
+# (Waymarked Trails' usage policy asks for moderate, identifiable access).
+USER_AGENT = f"wishmap/{_version()} (+https://github.com/Jimmy2027/wishmap)"
 
 
 class RemoteTrackError(Exception):
@@ -29,6 +46,26 @@ class NotPublicError(RemoteTrackError):
 
 class NotFoundError(RemoteTrackError):
     pass
+
+
+class RateLimitedError(RemoteTrackError):
+    """The platform answered 429 or 503: back off for `retry_after` seconds."""
+
+    def __init__(self, message: str, retry_after: float) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def retry_after_seconds(value: str | None) -> float:
+    """Parse a Retry-After header (delta-seconds), defaulted and capped."""
+    try:
+        seconds = float(value) if value is not None else DEFAULT_RETRY_AFTER_S
+    except ValueError:
+        # An HTTP-date, or junk: not worth parsing for a back-off.
+        seconds = DEFAULT_RETRY_AFTER_S
+    if seconds != seconds or seconds < 0:  # NaN, negative
+        seconds = DEFAULT_RETRY_AFTER_S
+    return min(seconds, MAX_RETRY_AFTER_S)
 
 
 @dataclass(frozen=True)
@@ -83,30 +120,36 @@ def download(
     not_public: str,
     not_found: str,
     accept: str = "application/json",
+    timeout: float = TIMEOUT_S,
 ) -> bytes:
     """GET `url` (on `domain`) and return its body, bounded.
 
     `site` names the platform in messages; `not_public`/`not_found` are
     the messages for 401/403 and 404. Raises RemoteTrackError (or a
-    subclass).
+    subclass: RateLimitedError for 429/503).
     """
     if not same_site(url, domain):
         raise ValueError(f"{url!r} is not on {domain}")
     opener = urllib.request.build_opener(SameSiteRedirects(domain, site))
-    req = urllib.request.Request(url, headers={"Accept": accept, "User-Agent": "wishmap"})
+    req = urllib.request.Request(url, headers={"Accept": accept, "User-Agent": USER_AGENT})
     try:
-        with opener.open(req, timeout=TIMEOUT_S) as resp:
+        with opener.open(req, timeout=timeout) as resp:
             body = resp.read(MAX_JSON_BYTES + 1)
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
             raise NotPublicError(not_public)
         if e.code == 404:
             raise NotFoundError(not_found)
+        if e.code in (429, 503):
+            raise RateLimitedError(
+                f"{site} is busy; try again later.",
+                retry_after_seconds(e.headers.get("Retry-After") if e.headers else None),
+            )
         raise RemoteTrackError(f"{site} answered HTTP {e.code}.")
     except (urllib.error.URLError, TimeoutError, OSError):
         raise RemoteTrackError(f"Could not reach {site}.")
     if len(body) > MAX_JSON_BYTES:
-        raise RemoteTrackError(f"That {site} item is too large to import.")
+        raise RemoteTrackError(f"{site}'s answer is too large.")
     return body
 
 

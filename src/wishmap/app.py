@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import getpass
 import logging
+import math
 import os
 import sys
 import uuid
@@ -40,6 +41,7 @@ from wishmap import (
     gpx,
     integrations_store,
     link_import,
+    osm_lookup,
     pins_store,
     public_links,
     ratings,
@@ -50,6 +52,7 @@ from wishmap import (
     sync_runner,
     userdata,
     vault,
+    waymarked,
 )
 from wishmap.auth import ApiUser, Ctx, CurrentUser, SameOrigin, VaultKey
 from wishmap.config import (
@@ -76,6 +79,9 @@ from wishmap.models import (
     GarminSettings,
     IntegrationSummary,
     MeResponse,
+    OsmRouteDetailsResponse,
+    OsmRouteOut,
+    OsmRoutesAtResponse,
     PinConfig,
     PinIn,
     PinPatch,
@@ -758,6 +764,150 @@ def _shared_view(fc: FeatureCollection) -> FeatureCollection:
 @app.get("/api/shared/{user_id}/routes")
 def get_shared_routes(ctx: Ctx, state: SharedOwner) -> FeatureCollection:
     return _shared_view(_loaded(ctx, state).routes_fc)
+
+
+# ── OSM route overlay lookups (Waymarked Trails) ─────────────────────
+# The map can overlay Waymarked Trails' signposted routes; its tiles load
+# straight from Waymarked, but its JSON API sends no CORS header, so a
+# click's lookups come through here, via `ctx.osm_lookup` (cache, limits
+# and back-off, see `osm_lookup`). Session only: a feature of the map
+# page, not of the token API. Read-only views never show the overlay.
+
+# A click box is a few pixels; this is far larger than any we send and
+# keeps the endpoint from being used to list a whole region.
+MAX_OSM_BBOX_DEG = 0.5
+
+
+def _osm_refused(e: osm_lookup.LookupRefused) -> HTTPException:
+    return HTTPException(
+        status_code=e.status,
+        detail=e.detail,
+        headers={"Retry-After": str(max(1, math.ceil(e.retry_after)))},
+    )
+
+
+def _osm_sites(raw: str) -> list[waymarked.Site]:
+    """Comma-separated Waymarked site names, deduped; 422 for an unknown one."""
+    by_name: dict[str, waymarked.Site] = {s: s for s in waymarked.SITES}
+    sites: list[waymarked.Site] = []
+    for name in raw.split(","):
+        site = by_name.get(name.strip())
+        if site is None:
+            raise HTTPException(status_code=422, detail=f"Unknown site {name.strip()!r}.")
+        if site not in sites:
+            sites.append(site)
+    return sites
+
+
+def _osm_bbox(raw: str) -> tuple[float, float, float, float]:
+    try:
+        west, south, east, north = (float(v) for v in raw.split(","))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="bbox must be west,south,east,north.")
+    if not all(math.isfinite(v) for v in (west, south, east, north)):
+        raise HTTPException(status_code=422, detail="bbox must be finite numbers.")
+    if not (-180 <= west < east <= 180 and -85 <= south < north <= 85):
+        raise HTTPException(status_code=422, detail="bbox is not a valid area.")
+    if east - west > MAX_OSM_BBOX_DEG or north - south > MAX_OSM_BBOX_DEG:
+        raise HTTPException(status_code=422, detail="bbox is too large; zoom in.")
+    return west, south, east, north
+
+
+def _osm_upstream_error(e: remote_track.RemoteTrackError) -> HTTPException:
+    if isinstance(e, remote_track.RateLimitedError):
+        return HTTPException(
+            status_code=503,
+            detail=str(e),
+            headers={"Retry-After": str(max(1, math.ceil(e.retry_after)))},
+        )
+    if isinstance(e, remote_track.NotFoundError):
+        return HTTPException(status_code=404, detail=str(e))
+    return HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/api/osm-routes/at")
+def get_osm_routes_at(
+    ctx: Ctx, user: CurrentUser, sites: str, bbox: str
+) -> OsmRoutesAtResponse:
+    """The signposted routes of `sites` (comma-separated Waymarked sites)
+    crossing `bbox` (west,south,east,north in degrees: a click's box).
+
+    The sites are asked one after the other; a site whose lookup fails is
+    reported in `errors` while the others' results still come back. Only
+    when every site failed does the request fail, with the first error:
+    429 over a rate limit, 503 while Waymarked asked us to back off, 502
+    when it can't be reached.
+    """
+    site_list = _osm_sites(sites)
+    box = waymarked.snap_bbox(*_osm_bbox(bbox))
+    lookup = ctx.osm_lookup
+    try:
+        lookup.admit(user.id)
+    except osm_lookup.LookupRefused as e:
+        raise _osm_refused(e)
+
+    found: list[waymarked.OsmRoute] = []
+    errors: dict[str, str] = {}
+    first_error: HTTPException | None = None
+    for site in site_list:
+        try:
+            found.extend(lookup.routes_at(site, box))
+        except osm_lookup.LookupRefused as e:
+            errors[site] = e.detail
+            first_error = first_error or _osm_refused(e)
+        except remote_track.RemoteTrackError as e:
+            errors[site] = str(e)
+            first_error = first_error or _osm_upstream_error(e)
+    if first_error is not None and len(errors) == len(site_list):
+        raise first_error
+
+    adopted = routes_store.existing_ids(
+        ctx.db_path, user.id, (_osm_route_id(r) for r in found)
+    )
+    found.sort(key=lambda r: waymarked.GROUPS.index(r.group))
+    return OsmRoutesAtResponse(
+        results=[
+            OsmRouteOut(
+                site=r.site,
+                id=r.id,
+                name=r.name,
+                ref=r.ref,
+                group=r.group,
+                itinerary=list(r.itinerary),
+                symbol_id=r.symbol_id,
+                symbol_description=r.symbol_description,
+                url=r.url,
+                adopted=_osm_route_id(r) in adopted,
+            )
+            for r in found
+        ],
+        errors=errors,
+    )
+
+
+def _osm_route_id(route: waymarked.OsmRoute) -> str:
+    """The id the route gets when imported (see `link_import.Link.route_id`)."""
+    return f"web-waymarked-{route.site}-{route.id}"
+
+
+@app.get("/api/osm-routes/{site}/{relation_id}")
+def get_osm_route(
+    site: str, relation_id: str, ctx: Ctx, user: CurrentUser
+) -> OsmRouteDetailsResponse:
+    """One Waymarked Trails route: details, length and display geometry."""
+    if "," in site:
+        raise HTTPException(status_code=422, detail="One site only.")
+    (wm_site,) = _osm_sites(site)
+    if not (relation_id.isascii() and relation_id.isdigit() and len(relation_id) <= 20):
+        raise HTTPException(status_code=422, detail="Not a route id.")
+    lookup = ctx.osm_lookup
+    try:
+        lookup.admit(user.id)
+        return lookup.details(wm_site, relation_id)
+    except osm_lookup.LookupRefused as e:
+        raise _osm_refused(e)
+    except remote_track.RemoteTrackError as e:
+        raise _osm_upstream_error(e)
 
 
 # ── Garmin / Strava integrations and the sync ─────────────────────────

@@ -256,6 +256,20 @@ def delete(db_path: Path, user_id: int, route_id: str) -> bool:
         return cur.rowcount > 0
 
 
+def existing_ids(db_path: Path, user_id: int, route_ids: Iterable[str]) -> set[str]:
+    """The subset of `route_ids` the user owns."""
+    ids = list(dict.fromkeys(route_ids))
+    if not ids:
+        return set()
+    marks = ",".join("?" * len(ids))
+    with db.connect(db_path) as conn:
+        rows = conn.execute(
+            f"SELECT id FROM routes WHERE user_id = ? AND id IN ({marks})",
+            (user_id, *ids),
+        ).fetchall()
+    return {row[0] for row in rows}
+
+
 def gpx_in_use(db_path: Path, user_id: int, gpx: str) -> bool:
     """True if any of the user's routes still points at GPX file `gpx`.
 

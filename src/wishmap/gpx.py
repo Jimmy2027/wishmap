@@ -51,6 +51,11 @@ def _distance_m(a: list[float], b: list[float]) -> float:
     return 2 * _EARTH_RADIUS_M * math.asin(math.sqrt(min(1.0, h)))
 
 
+def length_m(coords: list[list[float]]) -> float:
+    """Length in metres of the line through [lon, lat] `coords`."""
+    return sum(_distance_m(a, b) for a, b in zip(coords, coords[1:]))
+
+
 def split_at_gaps(
     coords: list[list[float]], max_gap_m: float = MAX_GAP_M
 ) -> list[list[list[float]]]:

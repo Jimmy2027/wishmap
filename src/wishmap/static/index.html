@@ -1205,13 +1205,100 @@
     .filter-group select { font-size: 12px; padding: 5px 26px 5px 8px; }
   }
 
+  /* ── OSM route overlays (Waymarked Trails, CyclOSM) and click lookup ── */
+  .osm-hint {
+    font-size: 10px;
+    font-style: italic;
+    color: var(--stone-500);
+    margin-top: 4px;
+  }
+
+  .osm-lookup-popup .leaflet-popup-content { max-width: 320px; }
+
+  .osm-popup {
+    padding: 12px 14px;
+    font-size: 12px;
+    color: var(--stone-700);
+  }
+  .osm-popup.osm-status,
+  .osm-popup .osm-status { color: var(--stone-500); font-style: italic; }
+  .osm-popup .osm-filter {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 10px;
+    color: var(--stone-500);
+    padding-bottom: 6px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--stone-200);
+  }
+  .osm-popup .osm-filter label { display: flex; align-items: center; gap: 3px; cursor: pointer; }
+  .osm-popup .osm-filter input { margin: 0; }
+  .osm-popup .osm-hits { max-height: 300px; overflow-y: auto; }
+  .osm-popup .osm-group-title {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--stone-500);
+    margin: 8px 0 2px;
+  }
+  .osm-popup .osm-hit {
+    display: flex;
+    gap: 8px;
+    padding: 6px 0;
+    border-top: 1px solid var(--stone-100);
+  }
+  .osm-popup .osm-symbol { width: 24px; height: 24px; flex-shrink: 0; object-fit: contain; }
+  .osm-popup .osm-hit-body { flex: 1; min-width: 0; }
+  .osm-popup .osm-hit-name {
+    font-weight: 600;
+    color: var(--stone-900);
+    overflow-wrap: anywhere;
+  }
+  .osm-popup .osm-ref {
+    font-weight: 700;
+    margin-right: 4px;
+    color: var(--stone-700);
+  }
+  .osm-popup .osm-hit-meta { font-size: 11px; color: var(--stone-500); }
+  .osm-popup .osm-hit-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+    font-size: 11px;
+  }
+  .osm-popup .osm-hit-actions button {
+    font: inherit;
+    padding: 2px 8px;
+    border: 1px solid var(--stone-300);
+    border-radius: 4px;
+    background: var(--stone-100);
+    color: var(--stone-700);
+    cursor: pointer;
+  }
+  .osm-popup .osm-hit-actions button:hover:not(:disabled) { border-color: var(--trail-green); }
+  .osm-popup .osm-hit-actions button:disabled { opacity: 0.6; cursor: default; }
+  .osm-popup .osm-adopted { color: var(--trail-green); font-weight: 600; }
+  .osm-popup .osm-details {
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--stone-700);
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+  }
+  #osm-list { max-height: none; }
+  .osm-popup .osm-errors { margin-top: 6px; font-size: 10px; color: var(--trail-red); }
+
   /* ── Read-only gate ──
      A read-only copy of this page (a public link's /u/<token>, or the
      static `wishmap export`) carries a readonly class on its body. These
      rules hide every edit affordance (sync, add route/pin, popup
      edit/remove buttons, the route and pin forms, sync prompts and the
      Garmin login, the login screen, account row and settings, other
-     users' shared routes) and make
+     users' shared routes, the OSM route overlays) and make
      rating stars display-only. The DOM nodes stay in place — the IIFE calls
      getElementById/addEventListener on them, so removing a node would
      null the lookup and throw. Hide + JS early-returns only; never remove.
@@ -1227,7 +1314,8 @@
   body.readonly .popup-actions,
   body.readonly .popup-edit,
   body.readonly .popup-delete,
-  body.readonly #shared-group { display: none !important; }
+  body.readonly #shared-group,
+  body.readonly #osm-group { display: none !important; }
   body.readonly .star { pointer-events: none; cursor: default; }
 </style>
 </head>
@@ -1266,6 +1354,13 @@
   <div class="filter-group" id="sport-legend-group">
     <label>Legend</label>
     <div class="sport-legend" id="sport-legend"></div>
+  </div>
+  <!-- Signposted-route overlays from Waymarked Trails, and CyclOSM's cycle
+       infrastructure; filled by the script. Never shown read-only. -->
+  <div class="filter-group" id="osm-group">
+    <label>OSM routes</label>
+    <div class="shared-list" id="osm-list"></div>
+    <div class="osm-hint" id="osm-hint" hidden>Click a route line to see which routes run there.</div>
   </div>
   <!-- Filled from GET /api/shared-users; stays hidden when nobody shares. -->
   <div class="filter-group" id="shared-group" hidden>
@@ -2063,6 +2158,14 @@ document.addEventListener('DOMContentLoaded', function () {
     return id.endsWith('-start') ? id.slice(0, -6) : id;
   }
 
+  // A click on a route, pin or shared route reaches the map too (Leaflet
+  // bubbles it, from the SVG paths and the hotline canvas alike), as does
+  // the one placing a pin. Tag the DOM event, so the OSM route lookup (a
+  // click on empty map) skips it.
+  function markClickTaken(e) {
+    if (e.originalEvent) e.originalEvent.wishmapClickTaken = true;
+  }
+
   // Escape user/GPX-derived text before it goes into popup/drawer innerHTML.
   // A route's name, notes (the pasted Strava URL), and tags can come straight
   // from the add-route form or an uploaded GPX <name>, so they must never be
@@ -2288,6 +2391,7 @@ document.addEventListener('DOMContentLoaded', function () {
   // line is a no-op there.
   function bindRouteInteractions(layer, feature, bounds) {
     layer.feature = feature;
+    layer.on('click', markClickTaken);
 
     routeLayers.set(feature.properties.id, layer);
     layer.bindPopup(popupHtml(feature.properties), { closeButton: false });
@@ -2416,6 +2520,7 @@ document.addEventListener('DOMContentLoaded', function () {
           routeStartLayers.set(stripStartSuffix(feature.properties.id), layer);
         }
         layer.bindPopup(popupHtml(feature.properties), { closeButton: false });
+        layer.on('click', markClickTaken);
         count++;
         bounds.extend(layer.getLatLng());
       },
@@ -2538,6 +2643,7 @@ document.addEventListener('DOMContentLoaded', function () {
       };
       const layer = L.geoJSON(feature, { style: () => style, pane: 'sharedRoutesPane' });
       layer.bindPopup(sharedPopupHtml(feature.properties, entry.username), { closeButton: false });
+      layer.on('click', markClickTaken);
       layer.on('mouseover', () => { layer.setStyle({ weight: 5, opacity: 1 }); layer.bringToFront(); });
       layer.on('mouseout', () => layer.setStyle(style));
       return layer;
@@ -3558,9 +3664,373 @@ document.addEventListener('DOMContentLoaded', function () {
   // its popup, which is closed again here): the pin goes where clicked.
   map.on('click', (e) => {
     if (!placingPin || READONLY) return;
+    markClickTaken(e);
     setPlacingPin(false);
     map.closePopup();
     showPinModal(null, e.latlng.wrap());
+  });
+
+  // ── OSM route overlays and click lookup ──
+  // Signed-in only (read-only views hide the panel section and add no
+  // layers). Each ticked Waymarked Trails site overlays its signposted
+  // routes; CyclOSM lite overlays cycle infrastructure (display only).
+  // Tiles load straight from those servers (browser-cached; never
+  // prefetched). A click on empty map with a Waymarked overlay on asks
+  // our server (GET /api/osm-routes/at, which proxies Waymarked's API with
+  // a cache and rate limits) which routes run there; the popup lists them,
+  // can highlight one (Show), link to it, and import it (Add) through the
+  // add-route modal. Keep the page's default Referer: Waymarked asks for
+  // a correct referrer, so never set Leaflet's referrerPolicy here.
+  const WAYMARKED_ATTRIBUTION = 'Route overlay: &copy; <a href="https://waymarkedtrails.org">Waymarked Trails</a> '
+    + '(<a href="https://creativecommons.org/licenses/by-sa/3.0/de/">CC BY-SA 3.0 DE</a>), '
+    + 'data &copy; OpenStreetMap contributors';
+  const CYCLOSM_ATTRIBUTION = 'Cycle overlay: &copy; <a href="https://www.cyclosm.org">CyclOSM</a>, '
+    + 'data &copy; OpenStreetMap contributors';
+  // key: a Waymarked site (as in waymarked.SITES), or 'cyclosm'.
+  const OSM_OVERLAYS = [
+    { key: 'hiking', label: 'Hiking', waymarked: true },
+    { key: 'cycling', label: 'Cycling', waymarked: true },
+    { key: 'mtb', label: 'MTB', waymarked: true },
+    { key: 'slopes', label: 'Slopes', waymarked: true },
+    { key: 'riding', label: 'Riding', waymarked: true },
+    { key: 'skating', label: 'Skating', waymarked: true },
+    { key: 'cyclosm', label: 'Cycle infrastructure (CyclOSM)', waymarked: false },
+  ];
+  const OSM_SITE_LABELS = Object.fromEntries(OSM_OVERLAYS.map(o => [o.key, o.label]));
+  // The sport an adopted route starts with, per Waymarked site (the user
+  // can still change it in the modal).
+  const OSM_SITE_SPORTS = { hiking: 'hiking', cycling: 'biking', mtb: 'mountain_biking', slopes: 'skiing' };
+  const OSM_OVERLAY_STORAGE_KEY = 'wishmap.osmOverlays';
+  const OSM_GROUPS_STORAGE_KEY = 'wishmap.osmHiddenGroups';
+  // Network levels, widest first (Waymarked's `group`).
+  const OSM_GROUPS = [
+    ['INT', 'International'], ['NAT', 'National'], ['REG', 'Regional'], ['LOC', 'Local'],
+  ];
+  // Half the side of the looked-up box around a click, in pixels.
+  const OSM_CLICK_PX = 8;
+  // Below this zoom a click box is too coarse to say which line was meant.
+  const OSM_MIN_LOOKUP_ZOOM = 9;
+
+  // Above the basemap (tilePane 200), below every route and pin (overlayPane 400).
+  map.createPane('osmOverlayPane').style.zIndex = 350;
+  map.getPane('osmOverlayPane').style.pointerEvents = 'none';
+  // The highlighted route sits above the user's and shared routes (≤ 420).
+  map.createPane('osmHighlightPane').style.zIndex = 430;
+  map.getPane('osmHighlightPane').style.pointerEvents = 'none';
+
+  function loadStoredList(key) {
+    try {
+      const v = JSON.parse(localStorage.getItem(key) || '[]');
+      return Array.isArray(v) ? v.filter(x => typeof x === 'string') : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  const osmSelected = new Set(loadStoredList(OSM_OVERLAY_STORAGE_KEY)
+    .filter(k => OSM_SITE_LABELS[k]));
+  const osmHiddenGroups = new Set(loadStoredList(OSM_GROUPS_STORAGE_KEY));
+  // key -> L.tileLayer, created on first use.
+  const osmTileLayers = new Map();
+  let osmHighlight = null;
+  let osmLookupPending = false;
+
+  function osmTileLayer(overlay) {
+    let layer = osmTileLayers.get(overlay.key);
+    if (!layer) {
+      const url = overlay.waymarked
+        ? `https://tile.waymarkedtrails.org/${overlay.key}/{z}/{x}/{y}.png`
+        : 'https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm-lite/{z}/{x}/{y}.png';
+      layer = L.tileLayer(url, {
+        pane: 'osmOverlayPane',
+        opacity: 0.8,
+        maxZoom: 18,
+        subdomains: 'abc',
+        attribution: overlay.waymarked ? WAYMARKED_ATTRIBUTION : CYCLOSM_ATTRIBUTION,
+      });
+      osmTileLayers.set(overlay.key, layer);
+    }
+    return layer;
+  }
+
+  function osmWaymarkedSites() {
+    return OSM_OVERLAYS.filter(o => o.waymarked && osmSelected.has(o.key)).map(o => o.key);
+  }
+
+  function setOsmOverlayShown(overlay, shown) {
+    if (shown) osmSelected.add(overlay.key); else osmSelected.delete(overlay.key);
+    try { localStorage.setItem(OSM_OVERLAY_STORAGE_KEY, JSON.stringify([...osmSelected])); } catch (_) {}
+    const layer = osmTileLayer(overlay);
+    if (shown) layer.addTo(map); else map.removeLayer(layer);
+    document.getElementById('osm-hint').hidden = osmWaymarkedSites().length === 0;
+  }
+
+  function populateOsmOverlays() {
+    const list = document.getElementById('osm-list');
+    list.replaceChildren();
+    for (const overlay of OSM_OVERLAYS) {
+      const label = document.createElement('label');
+      label.className = 'shared-item';
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.checked = osmSelected.has(overlay.key);
+      const name = document.createElement('span');
+      name.className = 'shared-name';
+      name.textContent = overlay.label;
+      label.append(box, name);
+      label.title = overlay.waymarked
+        ? `Signposted ${overlay.label.toLowerCase()} routes from Waymarked Trails`
+        : 'Cycle lanes and paths from CyclOSM (display only)';
+      list.appendChild(label);
+      box.addEventListener('change', () => setOsmOverlayShown(overlay, box.checked));
+    }
+  }
+
+  // Called once signed in: draw the overlays remembered in this browser.
+  function startOsmOverlays() {
+    if (READONLY) return;
+    for (const overlay of OSM_OVERLAYS) {
+      if (osmSelected.has(overlay.key)) setOsmOverlayShown(overlay, true);
+    }
+  }
+
+  if (!READONLY) populateOsmOverlays();
+
+  function clearOsmHighlight() {
+    if (osmHighlight) {
+      map.removeLayer(osmHighlight);
+      osmHighlight = null;
+    }
+  }
+
+  function osmEl(tag, className, text) {
+    const el = document.createElement(tag);
+    if (className) el.className = className;
+    if (text != null) el.textContent = text;
+    return el;
+  }
+
+  // A link only for an http(s) URL; anything else stays text.
+  function safeLink(url, text) {
+    if (!/^https?:\/\//i.test(url)) return document.createTextNode(text || url);
+    const a = osmEl('a', null, text || url);
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    return a;
+  }
+
+  function osmHitTitle(hit) {
+    return hit.name || hit.symbol_description || `Route ${hit.id}`;
+  }
+
+  function osmRouteAdopted(hit) {
+    return hit.adopted || !!findRoute(`web-waymarked-${hit.site}-${hit.id}`);
+  }
+
+  async function showOsmRoute(hit, button, detailsEl) {
+    clearOsmHighlight();
+    button.disabled = true;
+    const label = button.textContent;
+    button.textContent = 'Loading…';
+    detailsEl.hidden = true;
+    try {
+      const resp = await apiFetch(`/osm-routes/${hit.site}/${hit.id}`);
+      let body = null;
+      try { body = await resp.json(); } catch (_) { /* non-JSON error body */ }
+      if (!resp.ok) {
+        detailsEl.textContent = errorDetail(body, `Could not load the route (HTTP ${resp.status}).`);
+        detailsEl.hidden = false;
+        return;
+      }
+      // A popup closed meanwhile shows nothing.
+      if (!detailsEl.isConnected) return;
+      clearOsmHighlight();
+      const casing = L.geoJSON(body.geometry, {
+        pane: 'osmHighlightPane', interactive: false,
+        style: { color: '#1a1612', weight: 9, opacity: 0.55, lineCap: 'round', lineJoin: 'round' },
+      });
+      const line = L.geoJSON(body.geometry, {
+        pane: 'osmHighlightPane', interactive: false,
+        style: { color: '#ffd400', weight: 5, opacity: 1, dashArray: '10 8', lineCap: 'round', lineJoin: 'round' },
+      });
+      osmHighlight = L.featureGroup([casing, line]).addTo(map);
+      const bounds = osmHighlight.getBounds();
+      if (bounds.isValid()) map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
+
+      detailsEl.replaceChildren();
+      const lines = [`${body.length_km.toLocaleString(undefined, { maximumFractionDigits: 1 })} km`];
+      if (body.operator) lines.push(`Operator: ${body.operator}`);
+      detailsEl.append(lines.join('\n'));
+      if (body.website) {
+        detailsEl.append('\nWebsite: ', safeLink(body.website));
+      }
+      if (body.description) detailsEl.append(`\n${body.description}`);
+      detailsEl.hidden = false;
+    } catch (err) {
+      console.warn('OSM route details failed', err);
+      detailsEl.textContent = 'Could not reach the server.';
+      detailsEl.hidden = false;
+    } finally {
+      button.disabled = false;
+      button.textContent = label;
+    }
+  }
+
+  function adoptOsmRoute(hit) {
+    map.closePopup();
+    showAddRouteModal();
+    const sport = OSM_SITE_SPORTS[hit.site];
+    if (sport) populateSportSelect(arSport, sport);
+    arUrl.value = hit.url;
+    arUrl.dispatchEvent(new Event('input'));
+  }
+
+  function osmHitEl(hit) {
+    const row = osmEl('div', 'osm-hit');
+    row.dataset.group = hit.group;
+    if (hit.symbol_id) {
+      const img = osmEl('img', 'osm-symbol');
+      img.alt = '';
+      img.src = `https://${hit.site}.waymarkedtrails.org/api/v1/symbols/id/${encodeURIComponent(hit.symbol_id)}.svg`;
+      if (hit.symbol_description) img.title = hit.symbol_description;
+      row.appendChild(img);
+    }
+    const body = osmEl('div', 'osm-hit-body');
+    const name = osmEl('div', 'osm-hit-name');
+    if (hit.ref) name.appendChild(osmEl('span', 'osm-ref', hit.ref));
+    name.append(osmHitTitle(hit));
+    body.appendChild(name);
+    const meta = [];
+    if (hit.itinerary.length) meta.push(hit.itinerary.join(' – '));
+    meta.push(OSM_SITE_LABELS[hit.site] || hit.site);
+    body.appendChild(osmEl('div', 'osm-hit-meta', meta.join(' · ')));
+
+    const actions = osmEl('div', 'osm-hit-actions');
+    const details = osmEl('div', 'osm-details');
+    details.hidden = true;
+    const show = osmEl('button', null, 'Show');
+    show.type = 'button';
+    show.addEventListener('click', () => showOsmRoute(hit, show, details));
+    actions.appendChild(show);
+    actions.appendChild(safeLink(hit.url, 'Open on Waymarked Trails'));
+    if (osmRouteAdopted(hit)) {
+      actions.appendChild(osmEl('span', 'osm-adopted', 'On your map'));
+    } else {
+      const add = osmEl('button', null, 'Add to my wishmap');
+      add.type = 'button';
+      add.addEventListener('click', () => adoptOsmRoute(hit));
+      actions.appendChild(add);
+    }
+    body.append(actions, details);
+    row.appendChild(body);
+    return row;
+  }
+
+  // Hide the hits (and group titles) of the network levels unchecked in
+  // the popup's filter row.
+  function applyOsmGroupFilter(container) {
+    let shown = 0;
+    for (const section of container.querySelectorAll('.osm-group')) {
+      const hidden = osmHiddenGroups.has(section.dataset.group);
+      section.hidden = hidden;
+      if (!hidden) shown += section.querySelectorAll('.osm-hit').length;
+    }
+    container.querySelector('.osm-filtered').hidden = shown > 0;
+  }
+
+  function osmResultsEl(data) {
+    const root = osmEl('div', 'osm-popup');
+    const filter = osmEl('div', 'osm-filter');
+    const hits = osmEl('div', 'osm-hits');
+    for (const [group, title] of OSM_GROUPS) {
+      const label = osmEl('label');
+      label.title = title;
+      const box = osmEl('input');
+      box.type = 'checkbox';
+      box.checked = !osmHiddenGroups.has(group);
+      box.addEventListener('change', () => {
+        if (box.checked) osmHiddenGroups.delete(group); else osmHiddenGroups.add(group);
+        try { localStorage.setItem(OSM_GROUPS_STORAGE_KEY, JSON.stringify([...osmHiddenGroups])); } catch (_) {}
+        applyOsmGroupFilter(root);
+      });
+      label.append(box, group);
+      filter.appendChild(label);
+
+      const inGroup = data.results.filter(r => r.group === group);
+      if (!inGroup.length) continue;
+      const section = osmEl('div', 'osm-group');
+      section.dataset.group = group;
+      section.appendChild(osmEl('div', 'osm-group-title', title));
+      for (const hit of inGroup) section.appendChild(osmHitEl(hit));
+      hits.appendChild(section);
+    }
+    const filtered = osmEl('div', 'osm-status osm-filtered', 'Every route here is filtered out.');
+    root.append(filter, hits, filtered);
+    const errors = Object.entries(data.errors || {});
+    if (errors.length) {
+      root.appendChild(osmEl('div', 'osm-errors',
+        errors.map(([site, msg]) => `${OSM_SITE_LABELS[site] || site}: ${msg}`).join('\n')));
+    }
+    applyOsmGroupFilter(root);
+    return root;
+  }
+
+  function osmMessage(text) {
+    return osmEl('div', 'osm-popup osm-status', text);
+  }
+
+  async function lookupOsmRoutes(latlng) {
+    const sites = osmWaymarkedSites();
+    const popup = L.popup({ className: 'osm-lookup-popup', maxWidth: 320, autoPanPadding: [20, 20] })
+      .setLatLng(latlng);
+    if (map.getZoom() < OSM_MIN_LOOKUP_ZOOM) {
+      popup.setContent(osmMessage('Zoom in to look up routes.')).openOn(map);
+      setTimeout(() => { if (map.hasLayer(popup)) map.closePopup(popup); }, 2000);
+      return;
+    }
+    // The box around the click, in degrees (the server wants lon/lat).
+    const p = map.latLngToContainerPoint(latlng);
+    const sw = map.containerPointToLatLng([p.x - OSM_CLICK_PX, p.y + OSM_CLICK_PX]);
+    const ne = map.containerPointToLatLng([p.x + OSM_CLICK_PX, p.y - OSM_CLICK_PX]);
+    const c = latlng.wrap();
+    const halfLng = (ne.lng - sw.lng) / 2;
+    const bbox = [
+      Math.max(-180, c.lng - halfLng), Math.max(-85, sw.lat),
+      Math.min(180, c.lng + halfLng), Math.min(85, ne.lat),
+    ].map(v => v.toFixed(6)).join(',');
+
+    osmLookupPending = true;
+    popup.setContent(osmMessage('Looking up routes…')).openOn(map);
+    clearOsmHighlight();
+    popup.on('remove', clearOsmHighlight);
+    try {
+      const params = new URLSearchParams({ sites: sites.join(','), bbox });
+      const resp = await apiFetch(`/osm-routes/at?${params}`);
+      let body = null;
+      try { body = await resp.json(); } catch (_) { /* non-JSON error body */ }
+      if (!map.hasLayer(popup)) return;  // closed meanwhile
+      if (!resp.ok) {
+        popup.setContent(osmMessage(errorDetail(body, `Route lookup failed (HTTP ${resp.status}).`)));
+      } else if (!body.results.length && !Object.keys(body.errors || {}).length) {
+        popup.setContent(osmMessage('No signposted route here.'));
+        setTimeout(() => { if (map.hasLayer(popup)) map.closePopup(popup); }, 2000);
+      } else {
+        popup.setContent(osmResultsEl(body));
+      }
+    } catch (err) {
+      console.warn('OSM route lookup failed', err);
+      if (map.hasLayer(popup)) popup.setContent(osmMessage('Could not reach the server.'));
+    } finally {
+      osmLookupPending = false;
+    }
+  }
+
+  map.on('click', (e) => {
+    if (READONLY || placingPin || osmLookupPending) return;
+    if (e.originalEvent && e.originalEvent.wishmapClickTaken) return;
+    if (!osmWaymarkedSites().length) return;
+    lookupOsmRoutes(e.latlng);
   });
 
   document.getElementById('pin-cancel').addEventListener('click', hidePinModal);
@@ -4335,6 +4805,7 @@ document.addEventListener('DOMContentLoaded', function () {
     loadMapData();
     showCurrentSyncStatus();
     loadSharedUsers();
+    startOsmOverlays();
   }
 
   fetchJson(dataPath('config'))

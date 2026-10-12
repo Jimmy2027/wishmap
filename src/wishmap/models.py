@@ -479,3 +479,46 @@ class RouteRatingIn(BaseModel):
 class RouteRating(RouteRatingIn):
     """GET response. Server owns updated_at."""
     updated_at: str
+
+
+class OsmRouteOut(BaseModel):
+    """GET /api/osm-routes/at: one Waymarked Trails route at the clicked spot."""
+
+    site: str
+    # The OSM relation id (digits only).
+    id: str
+    name: str
+    ref: str
+    # Network level: INT, NAT, REG or LOC.
+    group: str
+    itinerary: list[str]
+    # For https://<site>.waymarkedtrails.org/api/v1/symbols/id/<symbol_id>.svg
+    symbol_id: str | None
+    # Describes the waymark; the only label of many unnamed local routes.
+    symbol_description: str
+    url: str
+    # True when the user already imported it (route web-waymarked-<site>-<id>).
+    adopted: bool
+
+
+class OsmRoutesAtResponse(BaseModel):
+    """GET /api/osm-routes/at: the routes found, and the sites that failed."""
+
+    results: list[OsmRouteOut]
+    # site -> user-facing message, for the sites whose lookup failed.
+    errors: dict[str, str] = {}
+
+
+class OsmRouteDetailsResponse(BaseModel):
+    """GET /api/osm-routes/{site}/{id}: one route's details and geometry."""
+
+    site: str
+    id: str
+    name: str
+    ref: str
+    length_km: float
+    operator: str
+    website: str
+    description: str
+    url: str
+    geometry: MultiLineStringGeometry

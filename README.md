@@ -128,6 +128,29 @@ back to `Origin`), so another site can't act through a logged-in browser.
 - **Filters** by sport and status, and a **Tags** checkbox per tag on the
   map: untick one to hide every route and pin carrying it (remembered in
   the browser).
+- **OSM routes** (signed in only; never in public links or exports): tick
+  a [Waymarked Trails](https://waymarkedtrails.org) site — Hiking,
+  Cycling, MTB, Slopes, Riding, Skating — to overlay its *signposted*
+  routes (OpenStreetMap route relations, not every path), or **Cycle
+  infrastructure (CyclOSM)** for cycle lanes and paths (display only).
+  The tiles come straight from those servers; the ticked boxes are
+  remembered in the browser. With a Waymarked overlay on, a click on
+  empty map lists the routes running there, widest network first
+  (international, national, regional, local; untick a level in the
+  popup to hide it). Per route: **Show** draws it highlighted and adds
+  its length, operator, website and description; **Open on Waymarked
+  Trails**; and **Add to my wishmap**, which opens ＋ Add route with the
+  route's link filled in (an imported route shows "On your map"
+  instead). The lookups go through the wishmap server to Waymarked
+  Trails' API (it allows no direct browser access): one request per
+  click or Show, cached (an hour for a spot, a day for a route) and
+  rate-limited per user and server-wide, as Waymarked's usage policy
+  asks; when Waymarked asks us to slow down, every lookup pauses for as
+  long as it says. The overlay is © Waymarked Trails (CC BY-SA 3.0 DE),
+  CyclOSM's © CyclOSM, both on © OpenStreetMap data; the map credits
+  them while shown. Clicks on your own routes and pins, and placing a
+  pin, work as before (a click in the gap of an `idea` route's dashes
+  counts as a click on the map).
 
 | Field | Description |
 |-------|-------------|
@@ -379,6 +402,10 @@ What that protects against, and what not:
 - **Sharing with other users** is opt-in and all or nothing: it shows your
   routes (track, name, sport, status, tags) to every account on the server.
   Notes, ratings and pins stay private.
+- **OSM route lookups** send the clicked spot (a box of a few pixels) and
+  the route ids you open to Waymarked Trails, from the server, not your
+  browser; the overlay tiles are loaded by your browser directly from
+  Waymarked Trails and CyclOSM.
 - **Forgetting the password** loses the vault key, so the saved Garmin login
   is gone (log in to Garmin again); the account's map data is unaffected.
 

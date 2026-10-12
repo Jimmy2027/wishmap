@@ -4,10 +4,10 @@ Everything the server keeps in memory between requests for one user lives
 on a `UserState`: the built GeoJSON collections, the background sync's
 status and lock, and a Garmin login parked on its MFA code. A
 `StateRegistry` hands out one `UserState` per user id, created on first
-use. The registry, the server-wide paths/settings and the login throttle
-are bundled into an `AppContext` that `lifespan` stores as `app.state.ctx`, so a fresh
-lifespan (a restart, or a new TestClient) starts from a clean slate — no
-module globals to reset.
+use. The registry, the server-wide paths/settings, the login throttle
+and the OSM route lookup are bundled into an `AppContext` that `lifespan`
+stores as `app.state.ctx`, so a fresh lifespan (a restart, or a new
+TestClient) starts from a clean slate — no module globals to reset.
 
 The GeoJSON is built lazily (see `userdata.ensure_loaded`): a state starts
 *cold* (`data is None`), the first read builds it, `invalidate()` drops it
@@ -15,8 +15,8 @@ after a sync so the next read rebuilds, and the per-route swaps patch a
 warm state in place (a no-op when cold — the next build reads the DB).
 
 This module is a leaf: it imports nothing from wishmap but `models`,
-`geojson` and `schema`, so `garmin`, `sync_runner` and `userdata` can all
-depend on it.
+`geojson`, `schema` and `osm_lookup` (itself only on `waymarked` and its
+helpers), so `garmin`, `sync_runner` and `userdata` can all depend on it.
 """
 
 import asyncio
@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any
 
 from wishmap.geojson import start_properties
 from wishmap.models import Feature, FeatureCollection, FeatureProperties, ServerSettings
+from wishmap.osm_lookup import OsmLookup
 # Re-exported (`as` form): the owner of rows written before accounts existed.
 from wishmap.schema import UNCLAIMED_USER_ID as UNCLAIMED_USER_ID
 
@@ -433,6 +434,8 @@ class AppContext:
     login_throttle: LoginThrottle = field(default_factory=LoginThrottle)
     # Failed API token checks, keyed per client address (see `auth`).
     token_throttle: LoginThrottle = field(default_factory=LoginThrottle)
+    # The map's OSM route overlay lookups (cache + rate limits, see `osm_lookup`).
+    osm_lookup: OsmLookup = field(default_factory=OsmLookup)
 
     def user_dir(self, user_id: int) -> Path:
         """The user's file tree; their routes' `gpx` paths are relative to it."""
