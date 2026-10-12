@@ -124,12 +124,24 @@ def point(lon: object, lat: object, ele: object = None) -> list[float] | None:
     return p
 
 
-def to_gpx(track: Track, *, creator: str) -> str:
-    """Serialise a Track as a single-track GPX 1.1 document."""
+def to_gpx(track: Track, *, creator: str, copyright: tuple[str, str] | None = None) -> str:
+    """Serialise a Track as a single-track GPX 1.1 document.
+
+    `copyright` is (author, licence URL), written to the GPX metadata so
+    the licence travels with the file (e.g. OSM data under the ODbL).
+    """
     lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         f"<gpx version=\"1.1\" creator={quoteattr(creator)} "
         'xmlns="http://www.topografix.com/GPX/1/1">',
+    ]
+    if copyright is not None:
+        author, license_url = copyright
+        lines += [
+            f"  <metadata><copyright author={quoteattr(author)}>"
+            f"<license>{escape(license_url)}</license></copyright></metadata>",
+        ]
+    lines += [
         f"  <trk><name>{escape(track.name)}</name>",
         f"    <link href={quoteattr(track.url)}/>",
         "    <trkseg>",

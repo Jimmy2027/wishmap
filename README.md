@@ -109,7 +109,10 @@ back to `Origin`), so another site can't act through a logged-in browser.
   its name (unless you give one) and, for Ride with GPS, its description
   (for Waymarked Trails: ref, operator and website). Waymarked Trails
   routes are always tagged `waymarked`, so the Tags filter toggles them
-  all at once; a superroute (e.g. a EuroVelo) comes in whole, following
+  all at once. They are OpenStreetMap data under the
+  [ODbL](https://opendatacommons.org/licenses/odbl/): their GPX carries
+  the licence, and while one is on the map (also in public links and
+  exports) the map credits "© OpenStreetMap contributors, ODbL"; a superroute (e.g. a EuroVelo) comes in whole, following
   the forward direction where it differs and leaving out side branches.
   Importing the same link again replaces the route. Private items can't
   be fetched this way (except a Komoot tour's share link with

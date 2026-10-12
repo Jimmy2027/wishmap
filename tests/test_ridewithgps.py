@@ -114,6 +114,7 @@ def test_to_gpx_round_trips_and_escapes_name() -> None:
     text = remote_track.to_gpx(track, creator="wishmap & co")
     assert "Alpine Bike 1 &lt;Route&gt;" in text
     assert 'creator="wishmap &amp; co"' in text
+    assert "<metadata>" not in text  # no licence claimed unless given
     assert gpx.parse_gpx_data(text) == track.coords
 
 

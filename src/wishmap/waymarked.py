@@ -34,6 +34,10 @@ DOMAIN = "waymarkedtrails.org"
 SITES: tuple[Site, ...] = ("cycling", "mtb", "hiking", "riding", "skating", "slopes")
 # Every imported route gets this tag, so they can be toggled together.
 TAG = "waymarked"
+# OSM data is under the ODbL; its GPX carries this (the map shows the
+# attribution while such routes are drawn, see index.html).
+COPYRIGHT_AUTHOR = "OpenStreetMap contributors"
+LICENSE = "https://opendatacommons.org/licenses/odbl/1-0/"
 
 _HOSTS: dict[str, Site] = {f"{s}.{DOMAIN}": s for s in SITES}
 _ID_RE = re.compile(r"^\d+$")

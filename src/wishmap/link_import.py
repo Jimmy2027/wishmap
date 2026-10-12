@@ -28,6 +28,8 @@ class Link:
     fetch: Callable[[], Track]
     # Added to the tags the user gave (e.g. "waymarked", to toggle them together).
     tags: tuple[str, ...] = ()
+    # (author, licence URL) written into the GPX, for data under an open licence.
+    copyright: tuple[str, str] | None = None
 
     @property
     def route_id(self) -> str:
@@ -39,7 +41,9 @@ class Link:
         return f"{self.site} {self.kind} {self.item_id}"
 
     def to_gpx(self, track: Track) -> str:
-        return remote_track.to_gpx(track, creator=f"wishmap ({self.site} import)")
+        return remote_track.to_gpx(
+            track, creator=f"wishmap ({self.site} import)", copyright=self.copyright
+        )
 
 
 def resolve(url: str) -> Link | None:
@@ -71,5 +75,6 @@ def resolve(url: str) -> Link | None:
             wm_id,
             lambda: waymarked.fetch_track(wm_site, wm_id),
             tags=(waymarked.TAG,),
+            copyright=(waymarked.COPYRIGHT_AUTHOR, waymarked.LICENSE),
         )
     return None

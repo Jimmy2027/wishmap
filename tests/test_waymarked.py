@@ -181,6 +181,11 @@ def test_import_creates_route_tagged_waymarked(
         ctx().user_dir(user_id("alice")) / "gpx" / "web" / "web-waymarked-cycling-19216720.gpx"
     )
     assert flat(gpx.parse_gpx(stored)) == pytest.approx(flat(EXPECTED), abs=1e-6)
+    # OSM data: the ODbL travels with the file.
+    assert (
+        '<copyright author="OpenStreetMap contributors">'
+        "<license>https://opendatacommons.org/licenses/odbl/1-0/</license></copyright>"
+    ) in stored.read_text()
 
     # The user may tag it "waymarked" too: no duplicate.
     again = _import(user_client, tags=["waymarked"])

@@ -1759,9 +1759,21 @@ document.addEventListener('DOMContentLoaded', function () {
   map.getPane('sharedRoutesPane').style.pointerEvents = 'none';
 
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; <a href="https://openstreetmap.org/copyright">OpenStreetMap</a>',
+    attribution: '&copy; <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     maxZoom: 19,
   }).addTo(map);
+
+  // Routes imported from Waymarked Trails are OpenStreetMap data (ODbL):
+  // while any is drawn (own or shared), the map credits it as such.
+  const OSM_ROUTE_ID_PREFIX = 'web-waymarked-';
+  const OSM_ROUTE_ATTRIBUTION = 'Routes: &copy; <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors, '
+    + '<a href="https://opendatacommons.org/licenses/odbl/">ODbL</a>, via '
+    + '<a href="https://waymarkedtrails.org">Waymarked Trails</a>';
+  let osmRouteAttributionShown = false;
+
+  function isOsmRoute(props) {
+    return typeof props.id === 'string' && props.id.startsWith(OSM_ROUTE_ID_PREFIX);
+  }
 
   let allPins = null;
   let allRoutes = null;
@@ -2480,7 +2492,28 @@ document.addEventListener('DOMContentLoaded', function () {
   // Redraw every checked user's loaded routes. Called at the end of
   // applyFilters (so the sport/status filters apply) and when a checkbox
   // changes or a user's routes arrive.
+  function updateOsmRouteAttribution() {
+    const visible = (fc) => fc.features.some(
+      (f) => isOsmRoute(f.properties) && matchesFilter(f.properties));
+    let shown = !!allRoutes && visible(allRoutes);
+    if (!shown && !READONLY) {
+      for (const userId of sharedSelected) {
+        const entry = sharedRoutes.get(userId);
+        if (entry && entry.fc && visible(entry.fc)) { shown = true; break; }
+      }
+    }
+    if (shown === osmRouteAttributionShown) return;
+    osmRouteAttributionShown = shown;
+    if (shown) map.attributionControl.addAttribution(OSM_ROUTE_ATTRIBUTION);
+    else map.attributionControl.removeAttribution(OSM_ROUTE_ATTRIBUTION);
+  }
+
   function renderSharedRoutes() {
+    drawSharedRoutes();
+    updateOsmRouteAttribution();
+  }
+
+  function drawSharedRoutes() {
     if (sharedLayer) {
       map.removeLayer(sharedLayer);
       sharedLayer = null;
