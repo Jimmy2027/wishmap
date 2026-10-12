@@ -1258,6 +1258,11 @@
       <option value="on">By heat</option>
     </select>
   </div>
+  <!-- One checkbox per tag on the map; unchecking hides what carries it. -->
+  <div class="filter-group" id="tag-group" hidden>
+    <label>Tags</label>
+    <div class="shared-list" id="tag-list"></div>
+  </div>
   <div class="filter-group" id="sport-legend-group">
     <label>Legend</label>
     <div class="sport-legend" id="sport-legend"></div>
@@ -1500,7 +1505,7 @@
 <div class="addroute-overlay" id="addroute-overlay" role="dialog" aria-modal="true" aria-labelledby="addroute-title">
   <div class="addroute-modal">
     <h3 id="addroute-title">Add a route</h3>
-    <p id="addroute-intro">Paste a public Ride with GPS trip/route or Komoot tour link to import it directly, or attach a <code>.gpx</code> (e.g. a Strava route's export) with an optional link to it.</p>
+    <p id="addroute-intro">Paste a public Ride with GPS trip/route, Komoot tour or Waymarked Trails route link to import it directly, or attach a <code>.gpx</code> (e.g. a Strava route's export) with an optional link to it.</p>
     <p class="ar-note" id="ar-sync-note" hidden>This route comes from Garmin: the next sync overwrites changes made here.</p>
     <form id="addroute-form">
       <label id="ar-url-label">Link
@@ -1779,6 +1784,16 @@ document.addEventListener('DOMContentLoaded', function () {
   const sharedRoutes = new Map();
   // Ids of the users whose routes are shown (checked in the panel).
   const sharedSelected = new Set();
+  // Tags the viewer unchecked in the panel (see populateTagFilter).
+  const TAGS_STORAGE_KEY = 'wishmap.hiddenTags';
+  const hiddenTags = new Set((() => {
+    try {
+      const tags = JSON.parse(localStorage.getItem(TAGS_STORAGE_KEY) || '[]');
+      return Array.isArray(tags) ? tags.filter(t => typeof t === 'string') : [];
+    } catch (_) {
+      return [];
+    }
+  })());
   let sharedLayer = null;
   const ratingsById = new Map();
   // Per-route list of [lat,lon] parts (one per (Multi)LineString line) for
@@ -1974,6 +1989,47 @@ document.addEventListener('DOMContentLoaded', function () {
       sel.value = previous;
     }
     renderSportLegend(sports);
+    populateTagFilter(pins, routes);
+  }
+
+  // ── Tag toggles ──
+  // One checkbox per tag on the viewer's own map (e.g. "waymarked" for
+  // Waymarked Trails imports); unchecking a tag hides every pin and route
+  // carrying it, shared routes included. Untagged features always show.
+  // The hidden tags are remembered per browser.
+  function saveHiddenTags() {
+    try { localStorage.setItem(TAGS_STORAGE_KEY, JSON.stringify([...hiddenTags])); } catch (_) {}
+  }
+
+  function populateTagFilter(pins, routes) {
+    const counts = new Map();
+    for (const fc of [pins, routes]) {
+      for (const f of fc.features) {
+        if (f.properties.kind === 'route_start') continue;
+        for (const t of f.properties.tags || []) counts.set(t, (counts.get(t) || 0) + 1);
+      }
+    }
+    const list = document.getElementById('tag-list');
+    list.replaceChildren();
+    [...counts.keys()].sort((a, b) => a.localeCompare(b)).forEach(tag => {
+      const label = document.createElement('label');
+      label.className = 'shared-item';
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.checked = !hiddenTags.has(tag);
+      const name = document.createElement('span');
+      name.className = 'shared-name';
+      name.textContent = `${tag} (${counts.get(tag)})`;
+      label.append(box, name);
+      label.title = tag;
+      list.appendChild(label);
+      box.addEventListener('change', () => {
+        if (box.checked) hiddenTags.delete(tag); else hiddenTags.add(tag);
+        saveHiddenTags();
+        applyFilters();
+      });
+    });
+    document.getElementById('tag-group').hidden = counts.size === 0;
   }
 
   // ── Sport color legend ──
@@ -2202,6 +2258,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const status = document.getElementById('status-filter').value;
     if (sport && !props.sport.includes(sport)) return false;
     if (status && props.status !== status) return false;
+    if (props.tags && props.tags.some(t => hiddenTags.has(t))) return false;
     return true;
   }
 
@@ -2370,7 +2427,7 @@ document.addEventListener('DOMContentLoaded', function () {
   // ── Other users' shared routes ──
   // Accounts that opted in (Settings > Share with other users) are listed
   // in the panel; checking one overlays their routes in a per-user color.
-  // They follow the sport/status filters but not the heat colors, aren't
+  // They follow the sport/status/tag filters but not the heat colors, aren't
   // counted as visible features, and carry no notes or ratings (the server
   // strips them). Never used read-only: a public link or export shows the
   // owner's map only.
@@ -3032,12 +3089,13 @@ document.addEventListener('DOMContentLoaded', function () {
   // The id of the route the modal is editing; null while it adds one.
   let editingRouteId = null;
 
-  // A Ride with GPS or Komoot link is imported server-side
+  // A Ride with GPS, Komoot or Waymarked Trails link is imported server-side
   // (POST /routes/import, which picks the platform from the link), so it
   // needs no GPX and may leave the name blank. Mirrors the server's parse_url()s.
   const IMPORT_LINKS = [
     { site: 'Ride with GPS', re: /^https?:\/\/(www\.)?ridewithgps\.com\/(trips|routes)\/\d+/i },
     { site: 'Komoot', re: /^https?:\/\/(www\.)?komoot\.(com|de)(\/[a-z]{2}(-[a-z]{2})?)?\/(tour|smarttour)\/\d+/i },
+    { site: 'Waymarked Trails', re: /^https?:\/\/(cycling|mtb|hiking|riding|skating|slopes)\.waymarkedtrails\.org\/[^#]*#route\?(.*&)?id=\d+/i },
   ];
 
   // The platform the link in the modal is imported from, or null.

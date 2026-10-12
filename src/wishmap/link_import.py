@@ -7,24 +7,27 @@ them in turn and returns the first match, ready to fetch.
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from wishmap import komoot, remote_track, ridewithgps
+from wishmap import komoot, remote_track, ridewithgps, waymarked
 from wishmap.remote_track import Track
 
 # For the error message when no importer recognises a link.
 SUPPORTED = (
-    "a Ride with GPS trip or route (https://ridewithgps.com/trips/… or /routes/…) "
-    "or a Komoot tour (https://www.komoot.com/tour/… or /smarttour/…)"
+    "a Ride with GPS trip or route (https://ridewithgps.com/trips/… or /routes/…), "
+    "a Komoot tour (https://www.komoot.com/tour/… or /smarttour/…) "
+    "or a Waymarked Trails route (https://cycling.waymarkedtrails.org/#route?id=…)"
 )
 
 
 @dataclass(frozen=True)
 class Link:
-    # Short platform key, part of the route id ("rwgps", "komoot").
+    # Short platform key, part of the route id ("rwgps", "komoot", "waymarked").
     key: str
     site: str
     kind: str
     item_id: str
     fetch: Callable[[], Track]
+    # Added to the tags the user gave (e.g. "waymarked", to toggle them together).
+    tags: tuple[str, ...] = ()
 
     @property
     def route_id(self) -> str:
@@ -58,5 +61,15 @@ def resolve(url: str) -> Link | None:
             km_kind,
             km_id,
             lambda: komoot.fetch_track(km_kind, km_id, token),
+        )
+    if (wm := waymarked.parse_url(url)) is not None:
+        wm_site, wm_id = wm
+        return Link(
+            "waymarked",
+            waymarked.SITE,
+            wm_site,
+            wm_id,
+            lambda: waymarked.fetch_track(wm_site, wm_id),
+            tags=(waymarked.TAG,),
         )
     return None

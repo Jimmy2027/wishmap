@@ -100,22 +100,31 @@ back to `Origin`), so another site can't act through a logged-in browser.
 - **＋ Add route**: paste a Strava route link (optional) and upload its
   exported GPX (up to 10 MB), then set name, sport, status and tags.
   A public **Ride with GPS** trip or route link
-  (`https://ridewithgps.com/trips/…` or `/routes/…`) or **Komoot** tour
-  link (`https://www.komoot.com/tour/…` or `/smarttour/…`) needs no file:
-  the server picks the platform from the link, downloads the track and
-  takes its name (unless you give one) and, for Ride with GPS, its
-  description. Importing the same link again replaces the route. Private
-  items can't be fetched this way (except a Komoot tour's share link with
-  `share_token`) — download their GPX and upload it. Both platforms are
-  read through the undocumented JSON their own websites use, so either may
-  break without notice.
+  (`https://ridewithgps.com/trips/…` or `/routes/…`), **Komoot** tour
+  link (`https://www.komoot.com/tour/…` or `/smarttour/…`) or
+  **Waymarked Trails** route link (a signposted OpenStreetMap route, e.g.
+  `https://cycling.waymarkedtrails.org/#route?id=…`; also the `mtb`,
+  `hiking`, `riding`, `skating` and `slopes` sites) needs no file: the
+  server picks the platform from the link, downloads the track and takes
+  its name (unless you give one) and, for Ride with GPS, its description
+  (for Waymarked Trails: ref, operator and website). Waymarked Trails
+  routes are always tagged `waymarked`, so the Tags filter toggles them
+  all at once; a superroute (e.g. a EuroVelo) comes in whole, following
+  the forward direction where it differs and leaving out side branches.
+  Importing the same link again replaces the route. Private items can't
+  be fetched this way (except a Komoot tour's share link with
+  `share_token`) — download their GPX and upload it. All three platforms
+  are read through the undocumented JSON their own websites use, so any
+  may break without notice.
 - **＋ Add pin**: click the button, then the map where the pin goes.
 - **Edit / delete**: the ✎ Edit and ✕ buttons in a route's or pin's popup.
   A route's GPX can't be edited — delete the route and add it again.
   Route-start markers follow their route.
 - **Ratings**: each route can be rated 1–5 on Fun, Difficulty and Scenery
   in its popup; the ☰ Routes drawer sorts by any axis.
-- **Filters** by sport and status.
+- **Filters** by sport and status, and a **Tags** checkbox per tag on the
+  map: untick one to hide every route and pin carrying it (remembered in
+  the browser).
 
 | Field | Description |
 |-------|-------------|
@@ -225,7 +234,7 @@ who may see them.
   and you are no longer offered after the others reload the page.
 - In the **Other users** group of the legend & filters panel, tick whose
   routes to show. Each user gets their own color; their routes follow the
-  sport and status filters but never feed the heatmap, and are not editable
+  sport, status and tag filters but never feed the heatmap, and are not editable
   or rateable. The selection is remembered in the browser.
 - Public links and static exports never include other users' routes.
 
@@ -249,7 +258,7 @@ curl -H "Authorization: Bearer $TOKEN" https://wishmap.example/api/routes
 curl -H "Authorization: Bearer $TOKEN" \
   -F gpx_file=@trail.gpx -F name="Trail" -F sport=hiking -F status=idea \
   -F tags="alps, 2026" https://wishmap.example/api/routes
-# import a public Ride with GPS trip/route or Komoot tour (platform picked from the link)
+# import a public Ride with GPS trip/route, Komoot tour or Waymarked Trails route (platform picked from the link)
 curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"url": "https://ridewithgps.com/routes/123", "sport": ["cycling"], "status": "planned"}' \
   https://wishmap.example/api/routes/import

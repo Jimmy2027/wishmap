@@ -392,9 +392,11 @@ def _store_web_route(
 
 @app.post("/api/routes/import", status_code=201, dependencies=[SameOrigin])
 def import_route(body: RouteImportIn, ctx: Ctx, state: ApiStateDep) -> RouteAddResponse:
-    """Add a route fetched from a public link: Ride with GPS or Komoot.
+    """Add a route fetched from a public link: Ride with GPS, Komoot or
+    Waymarked Trails.
 
-    The platform is picked from the link (`link_import.resolve`). The id
+    The platform is picked from the link (`link_import.resolve`), which may
+    add tags of its own (Waymarked Trails routes get "waymarked"). The id
     is derived from the link, so importing the same link again replaces
     the route (`created` False) instead of duplicating it. A blank name
     takes the one the platform has. 422 for a link we can't import (no
@@ -424,7 +426,7 @@ def import_route(body: RouteImportIn, ctx: Ctx, state: ApiStateDep) -> RouteAddR
             name=body.name or track.name[:200] or link.fallback_name,
             sport=body.sport,
             status=body.status,
-            tags=body.tags,
+            tags=list(dict.fromkeys([*body.tags, *link.tags])),
             notes=notes[:10_000],
             gpx=(WEB_ROUTE_GPX_SUBDIR / f"{route_id}.gpx").as_posix(),
             strava_id=None,
