@@ -87,8 +87,13 @@ def test_repo_config_loads_with_one_note(caplog: pytest.LogCaptureFixture) -> No
         settings = load_settings(REPO_TOML)
     with open(REPO_TOML, "rb") as f:
         data = tomllib.load(f)
-    fields = set(ServerSettings.model_fields)
+    # A setting that is off by having no value can't be written in TOML:
+    # it is shown commented out instead.
+    unset = {k for k, f in ServerSettings.model_fields.items() if f.default is None}
+    fields = set(ServerSettings.model_fields) - unset
     assert fields <= data.keys()
+    for key in unset:
+        assert f"\n# {key} = " in REPO_TOML.read_text()
     assert settings == ServerSettings(**{k: data[k] for k in fields})
     assert len(caplog.records) == 1
     assert "single-user data" in caplog.records[0].getMessage()

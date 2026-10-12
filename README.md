@@ -58,6 +58,9 @@ data_dir = "data"           # app state; relative to this file unless absolute
 | `secure_cookies` | `false` | Mark the login cookies `Secure` (HTTPS only). Must be `true` in production — see [Deployment](#deployment) |
 | `session_days` | `30` | Lifetime of a login and its cookies, in days |
 | `data_dir` | `"data"` | Where `wishmap.db` and the per-account files live |
+| `update_dir` | unset | Turns on [updating from the web UI](#updating-from-the-web-ui): the directory with the git clone and the release venvs |
+| `update_branch` | `"main"` | The branch such an update deploys |
+| `update_require_signed` | `false` | Deploy only commits whose signature `git verify-commit` accepts |
 
 Settings are read at startup; restart the server after changing them. The
 file must exist (it may be empty). Keys the server doesn't know are ignored
@@ -485,6 +488,80 @@ Restart=on-failure
 An account's map is built on its first request after a (re)start, which
 parses all of its GPX files — up to a minute for a thousand-route account.
 Later requests are served from memory.
+
+### Updating from the web UI
+
+An admin can deploy the newest commit of `update_branch` and restart the
+server from **Settings → Server**, without a shell and without root. Grant the
+rights on the command line (they can't be granted over HTTP):
+
+```bash
+wishmap admin --user NAME            # grant (--revoke takes them away)
+wishmap admin                        # list the admins
+```
+
+**Check for updates** fetches the branch and lists the commits the server
+doesn't run yet; **Update & restart** asks for the admin's password again,
+then, in the background:
+
+1. fetches the branch into `<update_dir>/src` (a git clone; updates come from
+   its `origin`) and, with `update_require_signed`, runs `git verify-commit`;
+2. builds the commit into a virtualenv of its own, `<update_dir>/releases/<sha>`
+   (`uv export --frozen` + `uv build` + `uv pip install`, then an import check);
+3. points the `current` symlink at it (the old one becomes `previous`; older
+   releases are deleted) and ends the server process.
+
+It is refused while a Garmin sync or Strava import runs, or a Garmin login waits
+for its MFA code: a restart would lose them. It deploys nothing if the branch
+moved on since the check, nor when the running commit already contains the
+branch's tip (the server runs a commit not pushed yet): an update never goes
+back. A running commit that isn't in the branch's history at all gets a warning.
+
+The service supervisor must then start the server again, through the launcher
+`deploy/wishmap-launch`, which runs `<update_dir>/current/bin/uvicorn`. After
+an update it gives the new release three starts; if the server never comes up,
+it switches `current` back to `previous`, and Settings reports the rollback.
+With OpenRC (systemd: `Restart=always` does the same):
+
+```sh
+supervisor="supervise-daemon"
+respawn_delay=2
+respawn_max=10
+respawn_period=300
+command_user="wishmap:wishmap"
+command="/srv/wishmap/wishmap-launch"
+command_args="/srv/wishmap/app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips 127.0.0.1"
+```
+
+and `update_dir = "/srv/wishmap/app"` in `wishmap.toml`. One-time setup: the
+directory owned by the server's user, the clone (an `https://` remote needs no
+key for a public repository), and the first release:
+
+```bash
+install -d -o wishmap -g wishmap /srv/wishmap/app
+sudo -u wishmap git clone https://github.com/OWNER/wishmap.git /srv/wishmap/app/src
+```
+
+then build the first release — `wishmap update` does an update's steps
+without the restart, from any wishmap install:
+
+```bash
+sudo -u wishmap uvx --from git+https://github.com/OWNER/wishmap \
+  wishmap update --config /srv/wishmap/wishmap.toml
+```
+
+`uv` and a Python matching the server's (`python3.13`) must be on the server
+user's `PATH`; uv's cache goes to `<update_dir>/cache`. Later, `wishmap update`
+(e.g. `/srv/wishmap/app/current/bin/wishmap`) is also the way to update from a
+shell, followed by a restart of the service.
+
+**Security**: the server's own user can now replace the server's code — which
+is what updating without root means. Code that compromises the running server
+can therefore make itself permanent (e.g. record passwords at the next login);
+with root-owned code it would only last until the next restart. The update
+itself is a session-only, password-confirmed admin action, and deploys only
+what the branch on `origin` holds: whoever can push there can run code on the
+server, so protect the branch (and consider `update_require_signed`).
 
 ## Data layout
 

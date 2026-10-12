@@ -19,6 +19,18 @@ session_days = 30
 # to this file unless absolute.
 data_dir = "data"
 
+# Let admins (`wishmap admin --user NAME`) update and restart the server from
+# Settings -> Server: a directory the server's user owns, holding a git clone
+# (`src/`) and the release venvs. Off unless set; see README, "Updating from
+# the web UI". Only for a deployment run by a supervisor that restarts it.
+# update_dir = "/srv/wishmap/app"
+
+# The branch an update deploys the newest commit of.
+update_branch = "main"
+
+# Deploy only commits `git verify-commit` accepts (keys in <update_dir>/gnupg).
+update_require_signed = false
+
 # ── Single-user data (before accounts) ──────────────────────────────
 # Everything below is NOT served: it is what `wishmap import-toml` moves into
 # an account (README, "Moving a single-user install into an account"):

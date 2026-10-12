@@ -72,6 +72,7 @@ def test_me_reports_account(user_client: TestClient) -> None:
         "integrations": {},
         "vault_unlocked": True,
         "sharing": False,
+        "is_admin": False,
     }
 
 

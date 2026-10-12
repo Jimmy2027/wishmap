@@ -4,7 +4,9 @@ import getpass
 import logging
 import math
 import os
+import signal
 import sys
+import threading
 import uuid
 import zipfile
 from collections.abc import AsyncGenerator, Callable, Sequence
@@ -33,6 +35,7 @@ from garminconnect import (
 from pydantic import BaseModel, Field, ValidationError
 
 from wishmap import (
+    admins,
     api_tokens,
     auth,
     db,
@@ -50,11 +53,12 @@ from wishmap import (
     shared_maps,
     strava,
     sync_runner,
+    users,
     userdata,
     vault,
     waymarked,
 )
-from wishmap.auth import ApiUser, Ctx, CurrentUser, SameOrigin, VaultKey
+from wishmap.auth import AdminUser, ApiUser, Ctx, CurrentUser, SameOrigin, VaultKey
 from wishmap.config import (
     ConfigError,
     load_settings,
@@ -97,8 +101,11 @@ from wishmap.models import (
     SharingResponse,
     StravaArchiveResponse,
     SyncRequest,
+    UpdateRequest,
+    UpdateStatus,
 )
 from wishmap.state import AppContext, StateRegistry, UserData, UserState, now_iso
+from wishmap.updater import Updater, running_release
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +172,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # on some user's first request.
     with db.connect(db_path):
         pass
+    updater = None
+    if settings.update_dir is not None:
+        updater = Updater.open(
+            base_path / settings.update_dir,
+            settings.update_branch,
+            require_signed=settings.update_require_signed,
+        )
     app.state.ctx = AppContext(
         registry=StateRegistry(),
         settings=settings,
@@ -172,6 +186,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         base_path=base_path,
         data_root=data_root,
         db_path=db_path,
+        updater=updater,
     )
     yield
 
@@ -259,6 +274,7 @@ def get_me(request: Request, ctx: Ctx, user: CurrentUser) -> MeResponse:
         },
         vault_unlocked=auth.request_vault_key(request, ctx, user) is not None,
         sharing=shared_maps.is_shared(ctx.db_path, user.id),
+        is_admin=admins.is_admin(ctx.db_path, user.id),
     )
 
 
@@ -1192,6 +1208,89 @@ async def post_garmin_mfa(
     return Response(status_code=204)
 
 
+# ── Server self-update (admins) ───────────────────────────────────────
+# An admin (granted with `wishmap admin`) can deploy the newest commit of
+# `update_branch` and restart the server from Settings; see `updater` for
+# how, without root. Session only, and the update itself asks for the
+# password again: a stolen session alone can't push code onto the server.
+
+
+def _restart_soon() -> None:
+    """End the server process in a moment, for the supervisor to restart.
+
+    SIGTERM is uvicorn's graceful shutdown; the delay lets the status
+    poll that is in flight see "restarting" first.
+    """
+    threading.Timer(1.0, os.kill, (os.getpid(), signal.SIGTERM)).start()
+
+
+def _restart_blocker(ctx: AppContext) -> str | None:
+    """Why the server must not restart right now, or None.
+
+    A restart would cut off a running Garmin sync or Strava import, and
+    lose a Garmin login waiting for its MFA code (it lives in memory).
+    """
+    for state in ctx.registry.all():
+        if sync_runner.is_running(state) or state.sync_lock.locked():
+            return "A Garmin sync or Strava import is running."
+        if state.pending_mfa.get(garmin.MFA_PENDING_TTL_SEC) is not None:
+            return "A Garmin login is waiting for its MFA code."
+    return None
+
+
+def _updater(ctx: AppContext) -> Updater:
+    if ctx.updater is None:
+        raise HTTPException(status_code=404, detail="self_update_disabled")
+    return ctx.updater
+
+
+@app.get("/api/admin/update")
+def get_update_status(ctx: Ctx, user: AdminUser) -> UpdateStatus:
+    """The self-update's state; `enabled: false` without an `update_dir`."""
+    if ctx.updater is None:
+        return UpdateStatus(enabled=False)
+    return ctx.updater.status()
+
+
+@app.post("/api/admin/update/check", dependencies=[SameOrigin])
+async def check_for_update(ctx: Ctx, user: AdminUser) -> JSONResponse:
+    """Fetch the branch and list the commits an update would deploy.
+
+    409 while a check or an update is in flight.
+    """
+    updater = _updater(ctx)
+    if not updater.begin("checking"):
+        return JSONResponse(status_code=409, content={"detail": "An update is in progress."})
+    await asyncio.to_thread(updater.run_check)
+    return JSONResponse(content=updater.status().model_dump())
+
+
+@app.post("/api/admin/update", dependencies=[SameOrigin])
+def post_update(body: UpdateRequest, ctx: Ctx, user: AdminUser) -> JSONResponse:
+    """Start deploying the branch's newest commit, then restart (202).
+
+    403 `wrong_password`; 409 while a check or an update is in flight, or
+    while a restart would cut something off (`_restart_blocker`). The
+    update runs in the background: poll GET /api/admin/update.
+    """
+    updater = _updater(ctx)
+    if not auth.confirm_password(ctx, user, body.password):
+        return JSONResponse(status_code=403, content={"detail": "wrong_password"})
+    reason = _restart_blocker(ctx)
+    if reason is not None:
+        return JSONResponse(status_code=409, content={"detail": f"{reason} Update once it has finished."})
+    if not updater.begin("updating"):
+        return JSONResponse(status_code=409, content={"detail": "An update is in progress."})
+    logger.info("User %r started a server update", user.username)
+    threading.Thread(
+        target=updater.run_update,
+        args=(body.commit, lambda: _restart_blocker(ctx), _restart_soon),
+        name="wishmap-update",
+        daemon=True,
+    ).start()
+    return JSONResponse(status_code=202, content=updater.status().model_dump())
+
+
 def _add_config_option(parser: argparse.ArgumentParser, default: str | None) -> None:
     parser.add_argument(
         "--config",
@@ -1271,6 +1370,32 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_config_option(export_cmd, argparse.SUPPRESS)
     export_cmd.add_argument("--user", required=True, help="account to export")
     export_cmd.add_argument("dir", type=Path, help="output directory")
+
+    admin_cmd = commands.add_parser(
+        "admin",
+        help="grant or revoke an account's admin rights (server updates)",
+        description=(
+            "Admins can update the server from the web UI (Settings -> "
+            "Server). Without --user, list the admins."
+        ),
+    )
+    _add_config_option(admin_cmd, argparse.SUPPRESS)
+    admin_cmd.add_argument("--user", help="account to grant (or revoke) admin rights")
+    admin_cmd.add_argument(
+        "--revoke", action="store_true", help="take the account's admin rights away"
+    )
+
+    update_cmd = commands.add_parser(
+        "update",
+        help="build the newest commit of update_branch and make it current",
+        description=(
+            "What Settings -> Server -> Update does, minus the restart: fetch "
+            "update_branch into <update_dir>/src, build its newest commit into "
+            "<update_dir>/releases and point <update_dir>/current at it. Run "
+            "it as the server's user, then restart the service."
+        ),
+    )
+    _add_config_option(update_cmd, argparse.SUPPRESS)
     return parser
 
 
@@ -1344,6 +1469,46 @@ def _run_import(args: argparse.Namespace) -> None:
         print(f"  Garmin account: {result.garmin_username}")
 
 
+def _run_admin(args: argparse.Namespace) -> None:
+    config_path = resolve_config_path()
+    settings = load_settings(config_path)
+    db_path = resolve_data_root(config_path, settings) / "wishmap.db"
+    if args.user is None:
+        if args.revoke:
+            sys.exit("--revoke needs --user")
+        names = admins.list_admins(db_path)
+        print("\n".join(names) if names else "No admins.")
+        return
+    user = users.get_by_username(db_path, args.user)
+    if user is None:
+        sys.exit(f"No account named {args.user!r}")
+    admins.set_admin(db_path, user.id, not args.revoke)
+    print(f"{user.username} is {'no longer' if args.revoke else 'now'} an admin")
+
+
+def _run_update() -> None:
+    config_path = resolve_config_path()
+    settings = load_settings(config_path)
+    if settings.update_dir is None:
+        sys.exit(f"{config_path}: update_dir is not set")
+    root = config_path.parent / settings.update_dir
+    updater = Updater(
+        root,
+        settings.update_branch,
+        require_signed=settings.update_require_signed,
+        running=running_release(root),
+    )
+    updater.begin("updating")
+    updater.run_update(None, lambda: None, lambda: None)
+    status = updater.status()
+    if status.state == "failed":
+        sys.exit(status.error)
+    if status.state == "restarting":
+        print(f"{root / 'current'} is now {status.latest}: restart the server to run it")
+    else:
+        print(status.message)
+
+
 def _run_export(args: argparse.Namespace) -> None:
     for path in export.export_site(args.dir, args.user):
         print(f"wrote {path}")
@@ -1367,6 +1532,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     try:
         if args.command == "import-toml":
             _run_import(args)
+        elif args.command == "admin":
+            _run_admin(args)
+        elif args.command == "update":
+            _run_update()
         else:
             _run_export(args)
     except (ConfigError, ImportTomlError, export.ExportError) as e:

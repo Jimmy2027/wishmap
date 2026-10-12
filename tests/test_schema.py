@@ -29,6 +29,7 @@ TABLES = {
     "public_links",
     "shared_maps",
     "api_tokens",
+    "admins",
 }
 
 LEGACY_RATINGS_DDL = """

@@ -36,7 +36,7 @@ from urllib.parse import urlsplit
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
-from wishmap import api_tokens, users, vault
+from wishmap import admins, api_tokens, users, vault
 from wishmap.models import AccountResponse, Credentials, PasswordChange
 from wishmap.state import AppContext
 from wishmap.users import Login, User
@@ -121,6 +121,17 @@ def current_user(
 
 
 CurrentUser = Annotated[User, Depends(current_user)]
+
+
+def admin_user(ctx: Ctx, user: CurrentUser) -> User:
+    """The signed-in user if a server admin (see `admins`); 403
+    `admin_required` otherwise. Session only, like `current_user`."""
+    if not admins.is_admin(ctx.db_path, user.id):
+        raise HTTPException(status_code=403, detail="admin_required")
+    return user
+
+
+AdminUser = Annotated[User, Depends(admin_user)]
 
 
 def _client_key(request: Request) -> str:
@@ -301,6 +312,13 @@ def _check_password(ctx: AppContext, username: str, password: str) -> Login | No
     else:
         ctx.login_throttle.record_success(key)
     return login
+
+
+def confirm_password(ctx: AppContext, user: User, password: str) -> bool:
+    """Whether `password` is the signed-in user's, for an action that asks
+    for it again. Throttled like a login (429 `too_many_attempts`)."""
+    login = _check_password(ctx, user.username, password)
+    return login is not None and login.user.id == user.id
 
 
 router = APIRouter(prefix="/api/auth", dependencies=[SameOrigin])

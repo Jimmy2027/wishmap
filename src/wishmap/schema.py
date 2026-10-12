@@ -147,6 +147,14 @@ _STATEMENTS: tuple[str, ...] = (
     """,
     "CREATE INDEX IF NOT EXISTS api_tokens_user_id ON api_tokens(user_id)",
     """
+    CREATE TABLE IF NOT EXISTS admins (
+        -- Presence = the user may administer the server (self-update);
+        -- granted only on the command line (`wishmap admin`).
+        user_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        created_at TEXT NOT NULL
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS shared_maps (
         -- Presence = the user shares their routes with every other account.
         user_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,

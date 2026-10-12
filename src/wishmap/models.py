@@ -91,6 +91,14 @@ class ServerSettings(BaseModel):
     # App-managed state (`wishmap.db`, per-user files), relative to the
     # config file's directory unless absolute.
     data_dir: str = "data"
+    # Self-update from the web UI (see `updater`): the directory, owned by
+    # the server's user, with the git clone and the release venvs. Relative
+    # to the config file's directory unless absolute. Unset = off.
+    update_dir: str | None = None
+    # The branch an update deploys the newest commit of.
+    update_branch: str = Field(default="main", pattern=r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+    # Deploy only commits `git verify-commit` accepts (keys in <update_dir>/gnupg).
+    update_require_signed: bool = False
 
 
 class WishmapConfig(BaseModel):
@@ -202,6 +210,8 @@ class MeResponse(BaseModel):
     vault_unlocked: bool
     # Whether the user shares their routes with the server's other accounts.
     sharing: bool
+    # Whether the user may update the server (see `admins`).
+    is_admin: bool
 
 
 class GarminSettings(BaseModel):
@@ -522,3 +532,43 @@ class OsmRouteDetailsResponse(BaseModel):
     description: str
     url: str
     geometry: MultiLineStringGeometry
+
+
+# ── Server self-update (see `updater`) ──
+
+UpdateState = Literal["idle", "checking", "updating", "restarting", "failed"]
+
+
+class UpdateCommit(BaseModel):
+    sha: str
+    subject: str
+
+
+class UpdateStatus(BaseModel):
+    """GET /api/admin/update: the server's self-update."""
+
+    # False when the server has no `update_dir` (then nothing else is set).
+    enabled: bool
+    branch: str | None = None
+    # The commit (short sha) the server runs; None if it doesn't run a release.
+    running: str | None = None
+    state: UpdateState = "idle"
+    # What a check or an update is doing right now.
+    step: str | None = None
+    # The outcome of the last check or update, when it needs saying.
+    message: str | None = None
+    error: str | None = None
+    # The branch's newest commit as of `checked_at`, and the commits it adds
+    # to the running one (newest first).
+    latest: str | None = None
+    commits: list[UpdateCommit] = []
+    checked_at: str | None = None
+    finished_at: str | None = None
+
+
+class UpdateRequest(BaseModel):
+    """POST /api/admin/update: the admin's password, and the commit they
+    were shown (nothing is deployed if the branch has moved on since)."""
+
+    password: str = Field(max_length=1024)
+    commit: str | None = Field(default=None, pattern=r"^[0-9a-f]{7,40}$")

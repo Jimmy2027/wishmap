@@ -37,6 +37,8 @@ from wishmap.schema import UNCLAIMED_USER_ID as UNCLAIMED_USER_ID
 if TYPE_CHECKING:
     from garminconnect import Garmin
 
+    from wishmap.updater import Updater
+
 
 def initial_sync_status() -> dict[str, Any]:
     """Return a fresh sync status dict (shape documented in `sync_runner`)."""
@@ -298,6 +300,11 @@ class StateRegistry:
                 state = self._states[user_id] = UserState(user_id=user_id)
             return state
 
+    def all(self) -> list[UserState]:
+        """Every state handed out so far (a snapshot)."""
+        with self._lock:
+            return list(self._states.values())
+
 
 @dataclass
 class _ThrottleEntry:
@@ -436,6 +443,8 @@ class AppContext:
     token_throttle: LoginThrottle = field(default_factory=LoginThrottle)
     # The map's OSM route overlay lookups (cache + rate limits, see `osm_lookup`).
     osm_lookup: OsmLookup = field(default_factory=OsmLookup)
+    # The server's self-update; None unless `update_dir` is set.
+    updater: "Updater | None" = None
 
     def user_dir(self, user_id: int) -> Path:
         """The user's file tree; their routes' `gpx` paths are relative to it."""

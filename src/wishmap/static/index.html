@@ -572,6 +572,18 @@
   .settings-modal .token-list .token-expired { color: var(--trail-red); }
   .settings-modal .token-list button { flex-shrink: 0; }
   .settings-modal #token-new-label { margin-top: 12px; }
+  .settings-modal .commit-list li { justify-content: flex-start; }
+  .settings-modal .commit-list code { flex-shrink: 0; color: var(--stone-500); }
+  .settings-modal pre.server-log {
+    max-height: 180px;
+    overflow: auto;
+    margin: 0 0 12px;
+    padding: 8px;
+    font-size: 11px;
+    white-space: pre-wrap;
+    background: var(--stone-50);
+    border: 1px solid var(--stone-200);
+  }
 
   /* ── Account row (signed-in user + log out) ── */
   .account-section {
@@ -1385,7 +1397,7 @@
   </div>
   <div class="account-section">
     <span class="account-name" id="account-name"></span>
-    <button id="settings-button" type="button" title="Account, Garmin, Strava, public link and API token settings">⚙ Settings</button>
+    <button id="settings-button" type="button" title="Account, Garmin, Strava, public link, API token and server settings">⚙ Settings</button>
   </div>
   </div>
 </div>
@@ -1567,6 +1579,24 @@
         <button type="button" id="token-copy">Copy</button>
       </div>
       <div class="settings-status" id="token-status" role="status"></div>
+    </section>
+
+    <section aria-labelledby="settings-server-title" id="settings-server" hidden>
+      <h4 id="settings-server-title">Server</h4>
+      <p class="settings-status" id="server-version"></p>
+      <ul class="token-list commit-list" id="server-commits"></ul>
+      <form id="server-form">
+        <label id="server-password-label" hidden>Your password <span class="auth-hint">to confirm the update</span>
+          <input id="server-password" type="password" autocomplete="current-password" required />
+        </label>
+        <div class="prompt-actions">
+          <button type="button" id="server-check">Check for updates</button>
+          <button type="submit" id="server-update" hidden>Update &amp; restart</button>
+          <button type="button" id="server-reload" hidden>Reload page</button>
+        </div>
+      </form>
+      <div class="settings-status" id="server-status" role="status"></div>
+      <pre class="server-log" id="server-log" hidden></pre>
     </section>
   </div>
 </div>
@@ -4444,6 +4474,7 @@ document.addEventListener('DOMContentLoaded', function () {
     hideNewToken();
     tokenList.replaceChildren();
     setStatus(tokenStatus, '');
+    serverSection.hidden = true;
     settingsOverlay.classList.add('visible');
     loadApiTokens();
     try {
@@ -4454,6 +4485,8 @@ document.addEventListener('DOMContentLoaded', function () {
       renderPublicLink(me.public_link);
       shareEnabled.checked = Boolean(me.sharing);
       shareEnabled.disabled = false;
+      serverSection.hidden = !me.is_admin;
+      if (me.is_admin) loadServerStatus();
     } catch (e) {
       console.warn('Loading settings failed', e);
       setStatus(garminStatus, 'Could not load the Garmin settings.', true);
@@ -4661,6 +4694,175 @@ document.addEventListener('DOMContentLoaded', function () {
       setStatus(tokenStatus, 'Press Ctrl+C (⌘C) to copy the selected token.');
     }
   });
+
+  // ── Server (admins) ──
+  // GET /api/admin/update reports the running commit and the state of a
+  // check or an update; POST …/check fetches the branch and lists what an
+  // update would deploy; POST /api/admin/update {password, commit} builds
+  // it and restarts the server. While the server is down (restarting) the
+  // poll's requests fail; it carries on until the server answers again,
+  // running another commit, or reports that the update failed.
+  const serverSection = document.getElementById('settings-server');
+  const serverVersion = document.getElementById('server-version');
+  const serverCommits = document.getElementById('server-commits');
+  const serverForm = document.getElementById('server-form');
+  const serverPasswordLabel = document.getElementById('server-password-label');
+  const serverPassword = document.getElementById('server-password');
+  const serverCheck = document.getElementById('server-check');
+  const serverUpdate = document.getElementById('server-update');
+  const serverReload = document.getElementById('server-reload');
+  const serverStatus = document.getElementById('server-status');
+  const serverLog = document.getElementById('server-log');
+  const SERVER_POLL_MS = 1500;
+  const SERVER_RESTART_TIMEOUT_MS = 5 * 60 * 1000;
+  // Set while an update is being followed: the commit running before it,
+  // and when it started (for the timeout).
+  let serverWatch = null;
+  // The last status shown: the update deploys the commit listed there.
+  let serverShown = null;
+
+  function renderServerStatus(s) {
+    serverShown = s;
+    const busy = ['checking', 'updating', 'restarting'].includes(s.state);
+    serverCheck.hidden = !s.enabled;
+    serverCheck.disabled = busy;
+    if (!s.enabled) {
+      setStatus(serverVersion, 'Updating from here is off: the server has no update_dir in its wishmap.toml.');
+    } else {
+      setStatus(serverVersion, s.running
+        ? `Running ${s.running} (branch ${s.branch}).`
+        : `Not running from a release yet; updates deploy branch ${s.branch}.`);
+    }
+    const pending = s.latest && s.latest !== s.running ? s.commits : [];
+    serverCommits.replaceChildren(...pending.map((c) => {
+      const li = document.createElement('li');
+      const sha = document.createElement('code');
+      sha.textContent = c.sha.slice(0, 7);
+      const subject = document.createElement('span');
+      subject.textContent = c.subject;
+      li.append(sha, subject);
+      return li;
+    }));
+    const canUpdate = s.enabled && !busy && pending.length > 0;
+    serverUpdate.hidden = !canUpdate;
+    serverPasswordLabel.hidden = !canUpdate;
+    serverUpdate.disabled = false;
+
+    let message = s.message || '';
+    if (s.state === 'checking' || s.state === 'updating') message = `${s.step || 'Working'}…`;
+    else if (s.state === 'restarting') message = 'Restarting…';
+    else if (!message && s.latest && pending.length) message = `${pending.length} new commit${pending.length === 1 ? '' : 's'} on ${s.branch}.`;
+    // The first line of an error is the message; the rest is the log tail.
+    const [errorLine, ...logLines] = (s.error || '').split('\n');
+    setStatus(serverStatus, s.state === 'failed' ? errorLine : message, s.state === 'failed');
+    const log = logLines.join('\n').trim();
+    serverLog.textContent = log;
+    serverLog.hidden = !(s.state === 'failed' && log);
+  }
+
+  async function loadServerStatus() {
+    serverReload.hidden = true;
+    try {
+      const s = await fetchJson('/admin/update');
+      renderServerStatus(s);
+      if (['updating', 'restarting'].includes(s.state) && !serverWatch) {
+        serverWatch = { from: s.running, since: Date.now() };
+        setTimeout(pollServer, SERVER_POLL_MS);
+      }
+    } catch (e) {
+      console.warn('Loading the server status failed', e);
+      setStatus(serverStatus, 'Could not load the server status.', true);
+    }
+  }
+
+  async function pollServer() {
+    if (!serverWatch) return;
+    let s = null;
+    try {
+      const resp = await apiFetch('/admin/update');
+      if (resp.ok) s = await resp.json();
+    } catch { /* down while it restarts */ }
+    if (s === null) {
+      setStatus(serverStatus, 'Restarting…');
+    } else if (s.running !== serverWatch.from || s.state === 'failed' || s.state === 'idle') {
+      const updated = s.running !== serverWatch.from;
+      serverWatch = null;
+      renderServerStatus(s);
+      // The page itself may have changed with the release.
+      serverReload.hidden = !updated;
+      return;
+    } else {
+      renderServerStatus(s);
+    }
+    if (Date.now() - serverWatch.since > SERVER_RESTART_TIMEOUT_MS) {
+      serverWatch = null;
+      setStatus(serverStatus, 'The server has not come back yet: check its log.', true);
+      return;
+    }
+    setTimeout(pollServer, SERVER_POLL_MS);
+  }
+
+  serverCheck.addEventListener('click', async () => {
+    serverCheck.disabled = true;
+    serverUpdate.hidden = true;
+    serverPasswordLabel.hidden = true;
+    serverLog.hidden = true;
+    setStatus(serverStatus, 'Checking…');
+    try {
+      const resp = await apiFetch('/admin/update/check', { method: 'POST' });
+      const body = await resp.json().catch(() => null);
+      if (resp.ok && body) {
+        renderServerStatus(body);
+        return;
+      }
+      if (resp.status !== 401) {
+        setStatus(serverStatus, errorDetail(body, `Could not check for updates (HTTP ${resp.status}).`), true);
+      }
+    } catch (e) {
+      console.warn('Checking for updates failed', e);
+      setStatus(serverStatus, 'Could not reach the server.', true);
+    }
+    serverCheck.disabled = false;
+  });
+
+  serverForm.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const shown = serverShown;
+    if (!shown || !shown.latest) return;
+    serverUpdate.disabled = true;
+    serverCheck.disabled = true;
+    serverLog.hidden = true;
+    setStatus(serverStatus, 'Starting the update…');
+    try {
+      const resp = await apiSendJson('POST', '/admin/update', {
+        password: serverPassword.value,
+        commit: shown.latest,
+      });
+      const body = await resp.json().catch(() => null);
+      if (resp.status === 202 && body) {
+        serverPassword.value = '';
+        serverWatch = { from: shown.running, since: Date.now() };
+        renderServerStatus(body);
+        setTimeout(pollServer, SERVER_POLL_MS);
+        return;
+      }
+      if (resp.status === 403 && body && body.detail === 'wrong_password') {
+        setStatus(serverStatus, 'Wrong password.', true);
+        serverPassword.select();
+      } else if (resp.status === 429) {
+        setStatus(serverStatus, 'Too many wrong passwords: wait a minute.', true);
+      } else if (resp.status !== 401) {
+        setStatus(serverStatus, errorDetail(body, `Could not start the update (HTTP ${resp.status}).`), true);
+      }
+    } catch (e) {
+      console.warn('Starting the update failed', e);
+      setStatus(serverStatus, 'Could not reach the server.', true);
+    }
+    serverUpdate.disabled = false;
+    serverCheck.disabled = false;
+  });
+
+  serverReload.addEventListener('click', () => window.location.reload());
 
   function hideSettingsModal() {
     settingsOverlay.classList.remove('visible');
