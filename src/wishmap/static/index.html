@@ -368,9 +368,15 @@
   }
 
   /* ── Sync prompt modal (Garmin MFA code) ── */
+  /* The overlays cover the visual viewport (--vv-top/--vv-height, set by
+     trackVisualViewport): a phone's on-screen keyboard shrinks it, and the
+     modal then scrolls instead of hiding its lower half under the keyboard. */
   .prompt-overlay {
     position: fixed;
     inset: 0;
+    top: var(--vv-top, 0px);
+    bottom: auto;
+    height: var(--vv-height, 100%);
     background: rgba(20, 20, 20, 0.75);
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
@@ -389,6 +395,8 @@
     border-radius: 8px;
     padding: 24px 28px;
     width: 380px;
+    max-height: calc(100% - 16px);
+    overflow-y: auto;
     box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5),
                 0 0 0 1px rgba(255, 255, 255, 0.04);
     font-size: 14px;
@@ -532,7 +540,7 @@
   .settings-modal {
     width: 440px;
     max-width: 92vw;
-    max-height: 90vh;
+    max-height: min(90vh, calc(100% - 16px));
     overflow-y: auto;
     border-left-color: var(--stone-500);
   }
@@ -665,6 +673,9 @@
   .addroute-overlay {
     position: fixed;
     inset: 0;
+    top: var(--vv-top, 0px);
+    bottom: auto;
+    height: var(--vv-height, 100%);
     background: rgba(20, 20, 20, 0.75);
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
@@ -684,7 +695,7 @@
     padding: 22px 26px;
     width: 400px;
     max-width: 92vw;
-    max-height: 90vh;
+    max-height: min(90vh, calc(100% - 16px));
     overflow-y: auto;
     box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5),
                 0 0 0 1px rgba(255, 255, 255, 0.04);
@@ -1798,6 +1809,31 @@ document.addEventListener('DOMContentLoaded', function () {
   const READONLY = document.body.classList.contains('readonly');
   const API_BASE = document.body.dataset.apiBase || '/api';
   const API_STATIC = document.body.dataset.apiStatic === '1';
+
+  // The modal overlays cover the visual viewport, not the layout one: on a
+  // phone the on-screen keyboard shrinks only the former, and an overlay
+  // sized to the latter keeps its lower half (and the field being typed
+  // in) under the keyboard. Once the size settles, the focused field is
+  // scrolled back into view within its modal.
+  function trackVisualViewport() {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const root = document.documentElement;
+    const sync = () => {
+      root.style.setProperty('--vv-top', `${vv.offsetTop}px`);
+      root.style.setProperty('--vv-height', `${vv.height}px`);
+    };
+    vv.addEventListener('scroll', sync);
+    vv.addEventListener('resize', () => {
+      sync();
+      const focused = document.activeElement;
+      if (focused && focused.closest('.prompt-overlay, .addroute-overlay')) {
+        focused.scrollIntoView({ block: 'nearest' });
+      }
+    });
+    sync();
+  }
+  trackVisualViewport();
 
   // Path (under API_BASE) of one of the four read endpoints — config,
   // pins, routes, ratings — which are static JSON files in the export.
@@ -5006,6 +5042,8 @@ document.addEventListener('DOMContentLoaded', function () {
       console.warn('Starting the update failed', e);
       setStatus(serverStatus, 'Could not reach the server.', true);
     }
+    // The message sits below the buttons, where a phone's keyboard can hide it.
+    serverStatus.scrollIntoView({ block: 'nearest' });
     serverUpdate.disabled = false;
     serverCheck.disabled = false;
   });
