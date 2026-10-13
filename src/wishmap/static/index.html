@@ -85,6 +85,11 @@
     border-radius: 10px;
     padding: 14px 16px;
     min-width: 180px;
+    /* Never taller than the window: the body scrolls instead (title stays). */
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - 28px);
+    max-height: calc(100dvh - 28px);
     opacity: 0;
     transform: translateY(-8px);
     animation: slideIn 0.4s ease 0.4s forwards;
@@ -113,6 +118,16 @@
   .filter-panel .panel-title:focus-visible {
     outline: 2px solid var(--trail-green);
     outline-offset: 2px;
+  }
+
+  .filter-panel .panel-body {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    min-height: 0;
+    /* Room for focus rings, which the scroll box would otherwise clip. */
+    margin: -3px -6px;
+    padding: 3px 6px;
   }
 
   .filter-panel .panel-chevron {
@@ -147,6 +162,39 @@
     color: var(--stone-500);
     margin-bottom: 4px;
   }
+
+  /* Foldable sections (Tags, Legend, ...): the heading is the toggle. */
+  .filter-group .group-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    padding: 0;
+    border: none;
+    background: none;
+    font-family: var(--font-body);
+    font-size: 10px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--stone-500);
+    text-align: left;
+    margin-bottom: 4px;
+    cursor: pointer;
+  }
+  .filter-group .group-title:hover { color: var(--stone-700); }
+  .filter-group .group-title:focus-visible {
+    outline: 2px solid var(--trail-green);
+    outline-offset: 2px;
+  }
+  .filter-group .group-chevron {
+    font-size: 10px;
+    transition: transform 0.2s ease;
+  }
+  .filter-group.folded .group-title { margin-bottom: 0; }
+  .filter-group.folded .group-chevron { transform: rotate(-90deg); }
+  .filter-group.folded > :not(.group-title) { display: none; }
 
   .filter-group select {
     width: 100%;
@@ -195,8 +243,6 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    max-height: 168px;
-    overflow-y: auto;
   }
 
   .legend-item {
@@ -230,8 +276,6 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    max-height: 120px;
-    overflow-y: auto;
   }
   .filter-group label.shared-item {
     display: flex;
@@ -1211,6 +1255,8 @@
       left: auto;
       min-width: 160px;
       padding: 10px 12px;
+      max-height: calc(100vh - 20px);
+      max-height: calc(100dvh - 20px);
     }
 
     .filter-panel .panel-title { font-size: 12px; }
@@ -1301,7 +1347,6 @@
     white-space: pre-line;
     overflow-wrap: anywhere;
   }
-  #osm-list { max-height: none; }
   .osm-popup .osm-errors { margin-top: 6px; font-size: 10px; color: var(--trail-red); }
 
   /* ── Read-only gate ──
@@ -1359,24 +1404,24 @@
     </select>
   </div>
   <!-- One checkbox per tag on the map; unchecking hides what carries it. -->
-  <div class="filter-group" id="tag-group" hidden>
-    <label>Tags</label>
+  <div class="filter-group" id="tag-group" data-foldable hidden>
+    <button class="group-title" type="button" aria-expanded="true" aria-controls="tag-list">Tags<span class="group-chevron" aria-hidden="true">▾</span></button>
     <div class="shared-list" id="tag-list"></div>
   </div>
-  <div class="filter-group" id="sport-legend-group">
-    <label>Legend</label>
+  <div class="filter-group" id="sport-legend-group" data-foldable>
+    <button class="group-title" type="button" aria-expanded="true" aria-controls="sport-legend">Legend<span class="group-chevron" aria-hidden="true">▾</span></button>
     <div class="sport-legend" id="sport-legend"></div>
   </div>
   <!-- Signposted-route overlays from Waymarked Trails, and CyclOSM's cycle
        infrastructure; filled by the script. Never shown read-only. -->
-  <div class="filter-group" id="osm-group">
-    <label>OSM routes</label>
+  <div class="filter-group" id="osm-group" data-foldable>
+    <button class="group-title" type="button" aria-expanded="true" aria-controls="osm-list osm-hint">OSM routes<span class="group-chevron" aria-hidden="true">▾</span></button>
     <div class="shared-list" id="osm-list"></div>
     <div class="osm-hint" id="osm-hint" hidden>Click a route line to see which routes run there.</div>
   </div>
   <!-- Filled from GET /api/shared-users; stays hidden when nobody shares. -->
-  <div class="filter-group" id="shared-group" hidden>
-    <label>Other users</label>
+  <div class="filter-group" id="shared-group" data-foldable hidden>
+    <button class="group-title" type="button" aria-expanded="true" aria-controls="shared-list">Other users<span class="group-chevron" aria-hidden="true">▾</span></button>
     <div class="shared-list" id="shared-list"></div>
   </div>
   <div class="feature-count">
@@ -4216,6 +4261,27 @@ document.addEventListener('DOMContentLoaded', function () {
     setPanelCollapsed(collapsed);
     try { localStorage.setItem('wishmap.panelCollapsed', collapsed ? '1' : '0'); } catch (_) {}
   });
+
+  // ── Fold single sections of the panel (by id, remembered per browser) ──
+  let foldedGroups = new Set();
+  try {
+    const stored = JSON.parse(localStorage.getItem('wishmap.foldedGroups') || '[]');
+    if (Array.isArray(stored)) foldedGroups = new Set(stored);
+  } catch (_) {}
+  for (const group of document.querySelectorAll('.filter-group[data-foldable]')) {
+    const toggle = group.querySelector('.group-title');
+    const setFolded = (folded) => {
+      group.classList.toggle('folded', folded);
+      toggle.setAttribute('aria-expanded', String(!folded));
+    };
+    setFolded(foldedGroups.has(group.id));
+    toggle.addEventListener('click', () => {
+      const folded = !group.classList.contains('folded');
+      setFolded(folded);
+      if (folded) foldedGroups.add(group.id); else foldedGroups.delete(group.id);
+      try { localStorage.setItem('wishmap.foldedGroups', JSON.stringify([...foldedGroups])); } catch (_) {}
+    });
+  }
 
   document.getElementById('drawer-toggle').addEventListener('click', () => {
     if (drawerEl.classList.contains('open')) closeDrawer(); else openDrawer();
