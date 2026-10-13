@@ -1230,6 +1230,21 @@
     border-color: var(--stone-200) !important;
   }
 
+  /* "Show my position" button, under the zoom buttons. */
+  .leaflet-control-locate a {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--stone-700);
+    border-color: var(--stone-200);
+    cursor: pointer;
+  }
+  .leaflet-control-locate svg { width: 16px; height: 16px; }
+  .leaflet-control-locate.locating svg { animation: locatePulse 1s ease-in-out infinite; }
+  .leaflet-control-locate.located a { color: var(--trail-blue); }
+  .leaflet-control-locate.failed a { color: var(--trail-red); }
+  @keyframes locatePulse { 50% { opacity: 0.3; } }
+
   .leaflet-control-attribution {
     font-family: var(--font-body) !important;
     font-size: 10px !important;
@@ -1932,6 +1947,73 @@ document.addEventListener('DOMContentLoaded', function () {
     attribution: '&copy; <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     maxZoom: 19,
   }).addTo(map);
+
+  // ── Current position ──
+  // A button under the zoom control asks the browser for its position
+  // (one fix, no tracking), centres the map on it and draws a dot with an
+  // accuracy circle. Neither takes clicks, so placing a pin or looking up
+  // OSM routes there still works. Also in the read-only views.
+  let locationLayer = null;
+  const LocateControl = L.Control.extend({
+    options: { position: 'topleft' },
+    onAdd() {
+      const container = L.DomUtil.create('div', 'leaflet-bar leaflet-control leaflet-control-locate');
+      const button = L.DomUtil.create('a', '', container);
+      button.href = '#';
+      button.setAttribute('role', 'button');
+      button.title = 'Show my position';
+      button.setAttribute('aria-label', 'Show my position');
+      button.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        + 'stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="7"/>'
+        + '<circle cx="12" cy="12" r="2.5" fill="currentColor"/>'
+        + '<path d="M12 1v4M12 19v4M1 12h4M19 12h4"/></svg>';
+      L.DomEvent.disableClickPropagation(container);
+      L.DomEvent.on(button, 'click', (e) => {
+        L.DomEvent.preventDefault(e);
+        if (container.classList.contains('locating')) return;
+        if (!('geolocation' in navigator)) {
+          showLocateError(container, 'This browser cannot tell its position.');
+          return;
+        }
+        container.classList.remove('failed');
+        container.classList.add('locating');
+        map.locate({ setView: true, maxZoom: 15, enableHighAccuracy: true, timeout: 15000 });
+      });
+      map.on('locationfound', (e) => {
+        container.classList.remove('locating', 'failed');
+        container.classList.add('located');
+        button.title = 'Show my position';
+        if (locationLayer) map.removeLayer(locationLayer);
+        locationLayer = L.layerGroup([
+          L.circle(e.latlng, {
+            radius: e.accuracy, interactive: false,
+            color: '#3f7fb5', weight: 1, fillColor: '#3f7fb5', fillOpacity: 0.12,
+          }),
+          L.circleMarker(e.latlng, {
+            radius: 7, interactive: false, pane: 'markerPane',
+            color: '#ffffff', weight: 2, fillColor: '#3f7fb5', fillOpacity: 1,
+          }),
+        ]).addTo(map);
+      });
+      map.on('locationerror', (e) => {
+        container.classList.remove('locating', 'located');
+        // code 1: permission denied; 2: unavailable; 3: timeout.
+        const message = e.code === 1
+          ? 'Location access was denied. Allow it in the browser to show your position.'
+          : `Could not determine your position: ${e.message}`;
+        showLocateError(container, message);
+      });
+      return container;
+    },
+  });
+
+  function showLocateError(container, message) {
+    container.classList.add('failed');
+    container.querySelector('a').title = message;
+    showFatalBanner(message);
+  }
+
+  new LocateControl().addTo(map);
 
   // Routes imported from Waymarked Trails are OpenStreetMap data (ODbL):
   // while any is drawn (own or shared), the map credits it as such.
